@@ -1,0 +1,21 @@
+-- Migration 0084: trip_segments.no_travel — 「同一地點/免交通」手動狀態
+--
+-- 使用者手動把一段連續同地停靠（如同一機場內兩停靠點：那覇機場 → 牛排屋88 機場店）
+-- 標記為「無交通」→ timeline 收合成「同一地點」小標，不再顯示自動算出的荒謬車程
+-- （直線略過 1km walk/drive gate → 被算成開車 9.4 km / 21 分）。
+--
+--   1        = 免交通（同一地點）
+--   NULL / 0 = 正常交通段（自動或手填）
+--
+-- recompute 見 no_travel=1 跳過（不覆寫，同 source='manual' lock）；
+-- read path（days/_merge、segments GET）見 no_travel=1 → 吐 sameplace marker 取代 travel。
+--
+-- Additive nullable（仿 0083 submode）：既有 row 自動 NULL、舊 code 不 SELECT 此欄則不受影響。
+--
+-- ⚠ 部署順序 load-bearing（同 0083）：新 code 在 days/_merge、segments、recompute、clone、
+--    import 以 explicit SELECT 硬引用 no_travel。若 code 先部署，pre-migration 視窗會
+--    `no such column: no_travel` 硬崩（非 30–90s race）。**必先對 prod D1 apply 此 migration，
+--    再 merge / auto-deploy 本 PR。** 反向安全：加 nullable 欄後既有 row 自動 NULL、舊 code 不受影響。
+--    附 migrations/rollback/0084_trip_segments_no_travel_rollback.sql。
+
+ALTER TABLE trip_segments ADD COLUMN no_travel INTEGER;

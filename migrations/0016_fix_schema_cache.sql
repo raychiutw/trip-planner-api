@@ -1,0 +1,78 @@
+-- Fix D1 schema cache issue: DROP+CREATE in 0015 didn't invalidate runtime cache.
+-- Re-create tables using the D1-compatible approach:
+-- 1. Drop the 0015 tables (they have data but runtime can't see new columns)
+-- 2. Recreate with the EXACT SAME SQL as 0015 (D1 should register as new tables)
+-- 3. If this still doesn't work, we'll use ALTER TABLE on the 0014 originals
+
+-- Backup data first (D1 will cascade-delete trip_pois when we drop)
+-- Data needs to be re-migrated after this migration
+
+DROP TABLE IF EXISTS poi_relations;
+DROP TABLE IF EXISTS trip_pois;
+DROP TABLE IF EXISTS pois;
+
+-- Exact same CREATE as 0015
+CREATE TABLE pois (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  type          TEXT NOT NULL CHECK (type IN ('hotel','restaurant','shopping','parking','attraction','transport','other')),
+  name          TEXT NOT NULL,
+  description   TEXT,
+  note          TEXT,
+  address       TEXT,
+  phone         TEXT,
+  email         TEXT,
+  website       TEXT,
+  hours         TEXT,
+  google_rating REAL,
+  category      TEXT,
+  maps          TEXT,
+  mapcode       TEXT,
+  lat           REAL,
+  lng           REAL,
+  country       TEXT DEFAULT 'JP',
+  source        TEXT DEFAULT 'ai',
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX idx_pois_type ON pois(type);
+CREATE INDEX idx_pois_name ON pois(name);
+
+CREATE TABLE trip_pois (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  trip_id             TEXT NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+  poi_id              INTEGER NOT NULL REFERENCES pois(id),
+  context             TEXT NOT NULL CHECK (context IN ('hotel','timeline','shopping')),
+  day_id              INTEGER REFERENCES trip_days(id) ON DELETE CASCADE,
+  entry_id            INTEGER REFERENCES trip_entries(id) ON DELETE CASCADE,
+  sort_order          INTEGER DEFAULT 0,
+  description         TEXT,
+  note                TEXT,
+  hours               TEXT,
+  checkout            TEXT,
+  breakfast_included  INTEGER,
+  breakfast_note      TEXT,
+  price               TEXT,
+  reservation         TEXT,
+  reservation_url     TEXT,
+  must_buy            TEXT,
+  source              TEXT DEFAULT 'ai',
+  created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  CHECK (
+    (context = 'hotel' AND day_id IS NOT NULL) OR
+    (context IN ('timeline','shopping') AND (entry_id IS NOT NULL OR day_id IS NOT NULL))
+  )
+);
+CREATE INDEX idx_trip_pois_trip ON trip_pois(trip_id);
+CREATE INDEX idx_trip_pois_poi ON trip_pois(poi_id);
+CREATE INDEX idx_trip_pois_day ON trip_pois(day_id);
+CREATE INDEX idx_trip_pois_entry ON trip_pois(entry_id);
+
+CREATE TABLE poi_relations (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  poi_id          INTEGER NOT NULL REFERENCES pois(id) ON DELETE CASCADE,
+  related_poi_id  INTEGER NOT NULL REFERENCES pois(id) ON DELETE CASCADE,
+  relation_type   TEXT NOT NULL CHECK (relation_type IN ('parking','nearby')),
+  note            TEXT,
+  UNIQUE(poi_id, related_poi_id, relation_type)
+);

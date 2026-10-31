@@ -1,0 +1,13 @@
+-- Migration 0085: trip_days DROP COLUMN title
+--
+-- 每日 custom title 下線 Phase 2/2。Phase 1（v2.55.49, PR #1016）已移除全部程式碼引用
+-- （days summary SELECT / buildAllDays payload / import + clone 寫入 / audit rollback
+-- allowlist / 前端 Day+DaySummary 型別 + DaySection hero）並部署上線 → 現行 prod code
+-- 不再 SELECT / INSERT trip_days.title。
+--
+-- 純 DROP，無 backfill：title 的編輯 UI 從未實作、是使用者不需要的 dead 欄位，資料丟棄。
+--
+-- Deploy-order（load-bearing）：本 DROP 必須在 Phase 1 code 上線「之後」才套 —— 否則舊
+-- code 的「SELECT id, day_num, date, day_of_week, label, title FROM trip_days」會
+-- no-such-column 崩。Phase 1 已於 v2.55.49（536830e8）部署完成，故此 DROP 安全。
+ALTER TABLE trip_days DROP COLUMN title;

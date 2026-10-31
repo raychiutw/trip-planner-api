@@ -22,3 +22,8 @@ export async function sha256Base64(input: string): Promise<string> {
   for (let i = 0; i < arr.length; i++) str += String.fromCharCode(arr[i]!);
   return btoa(str);
 }
+
+/** SHA-256 的 base64url（無 padding）；用於把 ticket／token 雜湊後再存庫。 */
+export async function sha256Base64Url(input: string): Promise<string> {
+  return (await sha256Base64(input)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}

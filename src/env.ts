@@ -23,4 +23,4 @@ export interface Env {
 }
 
 /** Hono 的型別參數：bindings 加上 middleware 掛在 context 的變數。 */
-export type AppEnv = { Bindings: Env; Variables: { requestId: string; auth?: AuthData | null } };
+export type AppEnv = { Bindings: Env; Variables: { requestId: string; auth?: AuthData | null; accessToken?: string } };

@@ -85,6 +85,7 @@ export const bearerAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
   if (!resolved) return unauthorized(scheme);
   const auth = resolved.auth;
   c.set('auth', auth);
+  c.set('accessToken', token);
   return next();
 };
 

@@ -68,6 +68,20 @@ describe('GitHub Actions', () => {
   });
 });
 
+describe('CodeQL 版本一致', () => {
+  it('init 與 analyze 必須是同一個 commit（不同版本 CodeQL 會直接失敗）', () => {
+    const codeql = workflows.find((w) => w.name === 'codeql.yml')!.text;
+    const shas = [...codeql.matchAll(/github\/codeql-action\/[\w-]+@([0-9a-f]{40})/g)].map((m) => m[1]);
+    expect(shas.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(shas).size, `codeql-action 的步驟用了不同版本：${[...new Set(shas)].join(', ')}`).toBe(1);
+  });
+
+  it('dependabot 把 codeql-action 群組成同一個 PR（否則 init 與 analyze 會被拆開升級）', () => {
+    const d = fs.readFileSync(path.join(root, '.github/dependabot.yml'), 'utf8');
+    expect(d).toMatch(/github\/codeql-action\*/);
+  });
+});
+
 describe('相依更新與審查設定', () => {
   it('dependabot 涵蓋 npm 與 github-actions', () => {
     const d = read('.github/dependabot.yml');

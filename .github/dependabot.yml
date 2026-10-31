@@ -13,3 +13,8 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    groups:
+      # codeql-action 的 init 與 analyze 必須同版本，拆成兩個 PR 會讓 CodeQL 失敗
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"

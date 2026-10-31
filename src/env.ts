@@ -5,4 +5,9 @@ export interface Env {
   ALLOWED_ORIGINS?: string;
   ENVIRONMENT?: 'production' | 'preview' | 'development';
   GOOGLE_MAPS_API_KEY?: string;
+  /** session / invitation token 簽章用的 secret（HKDF 衍生子金鑰）。 */
+  SESSION_SECRET?: string;
+  /** 寄信走 mac mini mailer：URL 與 Bearer token（src/lib/email.ts 的 EmailEnv）。 */
+  TRIPLINE_API_URL?: string;
+  TRIPLINE_API_SECRET?: string;
 }

@@ -13,6 +13,8 @@ export interface Env {
   AGENT_SIGNING_KEY_MINT?: string;
   /** session / invitation token 簽章用的 secret（HKDF 衍生子金鑰）。 */
   SESSION_SECRET?: string;
+  /** auth_audit_log 的 IP 雜湊用 HMAC key（未設則退回無鹽 SHA-256）。 */
+  SESSION_IP_HASH_SECRET?: string;
   /** 寄信走 mac mini mailer：URL 與 Bearer token（src/lib/email.ts 的 EmailEnv）。 */
   TRIPLINE_API_URL?: string;
   TRIPLINE_API_SECRET?: string;

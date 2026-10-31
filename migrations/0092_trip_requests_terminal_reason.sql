@@ -1,0 +1,36 @@
+-- Migration 0092: trip_requests.terminal_reason — request 為什麼結束
+--
+-- ## Background
+--
+-- 一筆 request 走到終結狀態時，「結束了」與「為什麼結束」是兩件事：
+--   - status          = open / processing / completed / failed（既有四值，不動）
+--   - terminal_reason = cancelled / timed_out / error / needs_consent（本欄，新增）
+--
+-- 決策與被否決的替代方案見 docs/adr/0007-request-termination-cancel-and-reap.md。
+-- 簡述：把 cancelled / timed_out 加進 `status` 需要改 CHECK constraint，而 SQLite
+-- 只能整張表 swap 才改得動 —— trip_requests 現在有 4 張 children FK（poi_favorites
+-- companion 映射 0050、trip_health_reports 0069、trip_notes linkage 0073、
+-- trip_note_ai_jobs 0091，其中 3 條 ON DELETE CASCADE）。migrations/0047 開頭記著
+-- 那條路造成過 prod 資料全失（D1 每個 statement 獨立 connection，PRAGMA
+-- foreign_keys = OFF 不持久，DROP TABLE 直接 CASCADE 砍光 children）。
+-- 純 ALTER TABLE ADD COLUMN 完全繞開這個地雷。
+--
+-- ## 刻意不加 CHECK constraint
+--
+-- 值域由 application code 白名單把關（對齊 processed_by 的 VALID_PROCESSORS 慣例）。
+-- 在這裡加 CHECK 等於把「日後要多一個終結原因」重新綁回上面那顆地雷 —— 那正是
+-- 本 migration 存在的理由。
+--
+-- ## Deploy 順序（migration-first，強制）
+--
+-- 必須先 apply 本 migration，再 merge / auto-deploy 讀寫 terminal_reason 的 PR。
+-- 新 code 在 requests/[id]/index.ts 以 explicit 欄名寫入，code 先部署會在
+-- pre-migration 視窗 `no such column: terminal_reason` 硬崩。
+-- 反向安全：加 nullable 欄後既有 row 自動 NULL；舊 code 無 SELECT * 依賴此欄、
+-- INSERT 省略 terminal_reason → 預設 NULL，故舊 code 不受本 migration 影響。
+--
+-- ## Rollback
+--
+-- SQLite 3.35+（D1）支援 DROP COLUMN。nullable、無 index / 無 FK 依賴，drop 安全。
+
+ALTER TABLE trip_requests ADD COLUMN terminal_reason TEXT;

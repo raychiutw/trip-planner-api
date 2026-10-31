@@ -1,0 +1,96 @@
+-- Migration 0086: DROP pois.photos — POI 照片功能移除
+--
+-- ## 為什麼這欄是死的（不變量，不是快照）
+--
+-- 0038 (v2.12 Wave 3) 加了 pois.photos，計畫由「scripts/populate-poi-photos.js
+-- 從 Wikimedia Commons 抓填」餵 StopLightbox 的 photo carousel。實際上：
+--   - 該 script **從未存在**（git log --all --diff-filter=A 掃全歷史，無此檔）
+--   - **結構上從無寫入路徑**：pois/[id].ts 的 ALLOWED_FIELDS、_poi.ts 的 INSERT
+--     欄位表與 COALESCE_FIELDS、enrich.ts 的 UPDATE，全都不含 photos
+-- → 與 row 數無關，任何筆數下都恆為 NULL。（2026-07-16 活 prod 抽驗：非 NULL 0 筆。）
+--
+-- 功能的 code 已於 Phase 1 = v2.55.78 / PR #1050 移除（StopLightbox 整個 component、
+-- PoiPhoto 型別、mapDay.ts 的 parsePhotos/isSafePhotoUrl、_merge.ts 的具名 SELECT）。
+-- 移除理由與「要重開照片得先付什麼代價」見 DESIGN.md → Material & Effects → Photos，
+-- 那裡是 SoT，不在此複述。
+--
+-- ## Deploy 順序 —— 拆兩個 PR，順序由 CI 的 path filter 強制
+--
+-- deploy.yml 在 push master 且命中 paths:['migrations/**'] 時**自動**跑
+-- `wrangler d1 migrations apply --remote --env production`，且與 CF Pages build
+-- **平行**起跑、通常搶先（見該檔「After this workflow」段自陳的 10-30s vs 60-120s）。
+-- 那是為 **additive** migration 設計的（新欄位要先在，新 code 才能用）。
+-- 對 DROP COLUMN 正好相反：
+--   migration 搶先 → 欄位沒了 → 舊 code 還在服務 30-90s
+--   → 舊 _merge.ts 仍 `SELECT ... p.photos` → /api/trips/:id/days 與 /entries/:eid
+--     直接 500（每次開行程頁都打的端點）
+-- 順序不在我們手上，寫「步驟 3 才 apply」是空話。
+--
+-- 【做法】反向利用同一個 path filter：
+--   PR A（**不含** migrations/** 任何檔）→ workflow 不觸發 → 只部署 photos-free 的 code
+--   PR B（**含** migrations/**）→ workflow 觸發、套用 DROP → 線上 code 早已不引用 → no-op
+-- PR A 實測驗證了這個機制：merge commit efa11c81 只觸發 CI + Lighthouse，
+-- deploy.yml 沒跑（其最後一次執行是 2026-07-13 的 deed14dd）。
+--
+-- 【先例】0085 (trip_days DROP COLUMN title) 同一個拆法、同一個理由：
+--   Phase 1 = #1016 (v2.55.49)、Phase 2 = #1017 (v2.55.50)，相隔約 12 分鐘、皆 PATCH。
+--
+-- 【反例，不要學】0062 (trip_pois rip-out)。它的註解要求一個 5 步手動交錯序列
+-- 「0060 → backend deploy → wait → 0061 → 0062」，但 0060/0061/0062 **全在同一個
+-- PR (#527, 7ec41521) 落地** —— merge 時單次 `wrangler d1 migrations apply` 會一口氣
+-- 套完三個，那個「中間插入 backend deploy + wait」在結構上根本沒有插入點。
+-- 0068 / 0078 則是明寫「單一 PR」。deploy.yml 建於 2026-04-13，早於
+-- 0062(05-14) / 0068(05-17) / 0078(06-02) —— 三者都帶著同一個 race，
+-- 是「前人也曝險過」的紀錄，不是安全背書。
+--
+-- ## 回滾地板（reverse race —— 正向競態的鏡像，本檔初稿漏掉的那一半）
+--
+-- **本 migration 套用後，CF Pages 不能再回滾到 v2.55.78 以前的部署。**
+-- v2.55.77 的 _merge.ts:149 仍是具名的 `p.hours, p.rating, p.price, p.photos, ...`
+-- → 對沒有 photos 的 schema 跑 → no such column → /api/trips/:id/days 與
+-- /entries/:eid 全 500。而 CF Pages 儀表板的「Rollback to this deployment」
+-- 一鍵回滾正是出事時的直覺反射（/canary 的存在就是為了觸發它），
+-- 那一鍵會把一個無關的局部故障放大成全站 500。
+--
+-- 要回滾到 v2.55.78 以前：**先** apply rollback/0086_pois_drop_photos_rollback.sql
+-- 把欄位加回去，**再**回滾部署。順序與正向相反，理由同一個：具名 SELECT 不容許
+-- schema 與 code 錯位。
+--
+-- 同理，pre-0086 的 D1 dump（backups/*.sql，INSERT 帶具名 "photos" 欄）做
+-- **表級/部分** restore 會逐行撞 no such column —— 得先套 rollback 再 restore。
+-- （整庫 from-scratch restore 自帶 CREATE TABLE，不受影響。）
+-- backup-prod-d1.sh 自稱「migration apply 前的安全網」並印出 restore 指令，
+-- 但它產出的那份 artifact 正好被這個 migration 破壞，值得在用它之前知道。
+--
+-- ## API contract：三個端點的回應會少掉 photos key（已知、無讀者）
+--
+-- PR A 部署驗證時發現：取 POI 的路徑分兩種，DROP 的影響完全不同。
+--   **具名** SELECT（`SELECT ... p.photos ...`）→ DROP 後 `no such column` 500。
+--     只有 _merge.ts 的 fetchEntryPoisByEntries 屬此，PR A 已移除。這是拆 PR 的原因。
+--   **星號** SELECT（`SELECT *` / `RETURNING *`）→ 不具名引用欄位，DROP 後只是少回
+--     一欄，**不報錯**；但該 key 會從回應靜默消失。今天仍帶 photos 的有：
+--       - _merge.ts:82  SELECT * FROM pois（hotel）      → `hotel.photos`
+--       - _merge.ts:101 SELECT * FROM pois（parking）    → `hotel.parking[].photos`
+--         （兩者都經 :251 `{ ...hotelPoi, parking: [...] }` 原樣攤進 days?all=1 回應）
+--       - pois/[id].ts:52 UPDATE ... RETURNING * → :66 json(newRow)
+--                                                        → PATCH /api/pois/:id 回應
+--       - pois/[id].ts:42 / :82 SELECT * FROM pois       → audit snapshot（新 snapshot
+--         少一個 key；歷史 snapshot 仍帶 photos，由 rollback.ts 的 whitelist 擋，
+--         見 v2.55.78 的 tests/api/rollback.integration.test.ts）
+-- 值恆為 null 且零可執行讀者（PR A 後 functions/ + src/ 對 photos 只剩註解），故無害。
+--
+-- **教訓**：查「還有誰讀這欄」時 grep 欄位名對星號 SELECT 無效 —— 要另外 grep
+-- `SELECT \*` / `RETURNING \*` 再逐一看下游。本檔初稿就是靠 grep 漏掉上面第 2、3、4 條，
+-- 只列了 hotel.photos；漏掉的第一條就在找到的那條下面 19 行。
+--
+-- ## 其餘風險
+--
+-- photos nullable + 無 FK + 無 index/trigger/view/CHECK 引用（對 prod sqlite_master
+-- 實測：只有 pois 表本身）。單一 DDL 語句，非多語句序列，無 half-applied 風險。
+-- 註：SQLite 文法不支援 `ALTER TABLE ... DROP COLUMN IF EXISTS`（IF EXISTS 只用於
+-- CREATE/DROP table/index/view/trigger），故 deploy.yml 提到的 idempotency 括號
+-- 對任何 ALTER TABLE migration 都不適用；wrangler 以 d1_migrations 表擋重跑。
+--
+-- Rollback: rollback/0086_pois_drop_photos_rollback.sql（與 0038 原定義逐字相同）。
+
+ALTER TABLE pois DROP COLUMN photos;

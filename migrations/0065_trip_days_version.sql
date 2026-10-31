@@ -1,0 +1,24 @@
+-- Migration 0065: ADD COLUMN trip_days.version (Day-level OCC counter)
+--
+-- ## Background
+--
+-- PUT /api/trips/:id/days/:num 接受整個 day blob（hotel + timeline + entries +
+-- alternates）替換。當前無 OCC 保護 — 兩 client 同時 PUT 後寫贏，前 client 全
+-- timeline 改動 silent lost update。實務上 rare（一般只有單 user 編輯），但兩個
+-- user 用同帳號（companion / mac mini cron）並發場景仍 risk。
+--
+-- ## 設計
+--
+-- 比照 v2.27.x `trip_entries.entry_pois_version`（migration 0058 INTEGER counter）：
+--   - INTEGER NOT NULL DEFAULT 0
+--   - 每次 PUT /days/:num 完成時 bump +1
+--   - PUT body 可選 `expectedDayVersion: number` — backend 拒絕 mismatch 拋
+--     STALE_ENTRY 409（複用既有 OCC error code，client 邏輯一致：refetch + retry）
+--   - 既有 client 不帶 expectedDayVersion → backwards-compat 略過 check
+--
+-- ## Deploy
+--
+-- 加欄位 + DEFAULT 0，無 backfill 顧慮（NULL 不會發生）。先 apply migration 再
+-- deploy backend；OLD backend 不讀 version 不會 5xx。可隨時 deploy，無 race。
+
+ALTER TABLE trip_days ADD COLUMN version INTEGER NOT NULL DEFAULT 0;

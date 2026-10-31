@@ -1,0 +1,37 @@
+-- Migration 0058: trip_entries.entry_pois_version OCC counter
+--
+-- ## Background
+--
+-- v2.27.0 round 4 attempted to fix Codex F2 (entry_pois_version backward) by switching
+-- the OCC source from `MAX(trip_entry_pois.updated_at)` to `trip_entries.updated_at`.
+-- That introduced TWO new bugs found in round 5:
+--
+-- 1. **Dual-source mismatch**: GET path (`fetchEntryPoisByEntries` in `_merge.ts`)
+--    still returned MAX(trip_entry_pois.updated_at), while write path validated
+--    trip_entries.updated_at. Fresh clients hit 409 STALE_ENTRY immediately.
+--
+-- 2. **Cross-mutation false-positive**: PATCH /entries (note edit, time edit, drag
+--    reorder) bumps trip_entries.updated_at, invalidating the entryPoisVersion
+--    token. Single-user repro: open EditEntryPage → edit note → click setMaster
+--    → 409 STALE_ENTRY.
+--
+-- ## Phase 1 fix (this migration)
+--
+-- Add a dedicated INTEGER column `entry_pois_version` to `trip_entries`. Only the
+-- 4 multi-POI mutating helpers (setMaster / addAlternate / removeAlternate /
+-- reorderAlternates) increment it. PATCH /entries note/time edits do NOT touch it.
+-- GET + write paths read the same column. Integer comparison, no format issues,
+-- no false positives.
+--
+-- Existing rows default to 0. The first multi-POI mutation bumps to 1. Frontend
+-- that GETs 0 and sends back 0 on a mutation also passes the check (0 == 0) on
+-- first contact — the bump increments to 1.
+--
+-- ## Deploy 順序
+--
+-- 1. Apply migration first (ADD COLUMN with DEFAULT is safe — existing rows
+--    silently get 0).
+-- 2. Merge PR + deploy backend.
+-- 3. Frontend GETs new column value, sends back on mutations.
+
+ALTER TABLE trip_entries ADD COLUMN entry_pois_version INTEGER NOT NULL DEFAULT 0;

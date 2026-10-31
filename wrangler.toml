@@ -9,3 +9,4 @@ compatibility_flags = ["nodejs_compat"]
 binding = "DB"
 database_name = "trip-planner-db-staging"
 database_id = "53f38e2c-e17d-4961-ba9e-f61e63477ecc"
+migrations_dir = "migrations"

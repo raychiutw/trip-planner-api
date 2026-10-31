@@ -1,0 +1,47 @@
+-- Migration 0060: trip_pois rip-out phase 1 — ADD COLUMN trip_days.hotel_poi_id
+--
+-- ## Background
+--
+-- v2.29.0 Phase-2 schema cleanup: 廢除 trip_pois 整表。Hotel 從 trip_pois(context='hotel')
+-- 搬到 trip_days.hotel_poi_id（FK to pois）；entry-level shopping 從 trip_pois(context='shopping')
+-- 搬到 trip_entry_pois；day-level shopping (24 rows, entry_id IS NULL) 直接 DELETE。
+--
+-- 與本 migration 同 PR 一併 drop 的：
+--   - trip_entries.{time, poi_id, travel_type, travel_desc, travel_min,
+--                    travel_distance_m, travel_computed_at, travel_source} (8 cols)
+--   - trip_destinations.{osm_id, osm_type} (2 cols)
+--   - trip_pois 整表
+--
+-- ## Scope (Migration 0060 only)
+--
+-- ADD COLUMN trip_days.hotel_poi_id INTEGER REFERENCES pois(id)。
+-- 不 backfill (留給 0061)。不 DROP (留給 0062)。
+--
+-- ## Deploy 順序（5-step expand-contract，hard rule）
+--
+-- 1. Apply migration 0060 (此檔)：ADD COLUMN
+-- 2. Merge PR + CF Pages auto-deploy backend（新 code 寫 hotel_poi_id，不再 INSERT trip_pois）
+-- 3. Wait 60s（讓 in-flight 舊 backend request 完成）
+-- 4. Apply migration 0061：Backfill hotel + entry-level shopping，DELETE day-level shopping
+-- 5. Apply migration 0062：DROP 10 cols + DROP TABLE trip_pois
+--
+-- 如果順序顛倒（e.g. 先 apply 0062）：新 backend 找不到 hotel_poi_id 寫入失敗，
+-- 或舊 backend 還在 INSERT trip_pois 但表已 drop → SQL fail。
+--
+-- =============================================
+-- 1. ADD COLUMN trip_days.hotel_poi_id
+-- =============================================
+-- FK to pois(id)，nullable（一個 day 可能沒掛 hotel）。
+-- 不加 ON DELETE：如果 hotel POI 被刪，希望保留 trip_days row（hotel_poi_id 變
+-- dangling）；後端讀取時 LEFT JOIN pois，孤兒 FK 視為 null hotel。
+--
+-- 注意：SQLite ALTER TABLE ADD COLUMN 不強制 FK 完整性檢查既有資料，新 INSERT
+-- 才會檢查。Backfill (migration 0061) 用 INNER JOIN 確保 target POI 存在。
+--
+ALTER TABLE trip_days ADD COLUMN hotel_poi_id INTEGER REFERENCES pois(id);
+
+-- =============================================
+-- 2. ANALYZE
+-- =============================================
+
+ANALYZE trip_days;

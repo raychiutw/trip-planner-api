@@ -153,6 +153,12 @@ describe('兌換 ticket', () => {
     await err401(await events(1, { ticket: t }));
     expect(ticketRows()).toHaveLength(0);
   });
+  it('同時兌換同一張 ticket：恰好一個成功', async () => {
+    setStatus(1, 'completed');
+    const t = await ticketFor(1);
+    const results = await Promise.all([events(1, { ticket: t }), events(1, { ticket: t }), events(1, { ticket: t })]);
+    expect(results.map((r) => r.status).sort()).toEqual([200, 401, 401]);
+  });
   it('過期的 ticket → 401', async () => {
     const t = await ticketFor(1);
     d1.raw.prepare("UPDATE oauth_models SET expires_at = ? WHERE name = 'SseTicket'").run(NOW() - 1);
@@ -238,6 +244,17 @@ describe('串流行為', () => {
     const { events: evs, closed } = await readSse(await events(1, { ticket: t }), undefined, 3000);
     expect(closed).toBe(true);
     expect(evs.at(-1)).toMatchObject({ event: 'reconnect', data: { reason: 'token_expired' } });
+  });
+  it('憑證到期後，用同一 grant 的新 token 換票即可接續（refresh 之後的情境）', async () => {
+    token('old', { client_id: 'web', user_id: 'u1', scopes: ['trips:read'], grantId: 'g-refresh' }, NOW() + 400);
+    const first = await readSse(await events(1, { ticket: await ticketFor(1, 'old') }), undefined, 3000);
+    expect(first.events.at(-1)).toMatchObject({ event: 'reconnect', data: { reason: 'token_expired' } });
+    const lastId = first.events.find((e) => e.id)!.id!;
+    // refresh 之後：同一個 grant 發了新的 access token（舊的已過期）
+    token('new', { client_id: 'web', user_id: 'u1', scopes: ['trips:read'], grantId: 'g-refresh' });
+    setStatus(1, 'completed');
+    const resumed = await readSse(await events(1, { ticket: await ticketFor(1, 'new'), lastEventId: lastId }));
+    expect(resumed.events[0]).toMatchObject({ data: { status: 'completed' } });
   });
   it('憑證在串流中途被撤銷 → reconnect（grant_revoked）', async () => {
     const res = await events(1, { ticket: await ticketFor(1) });

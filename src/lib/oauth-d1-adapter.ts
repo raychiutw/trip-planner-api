@@ -53,13 +53,18 @@ export class D1Adapter {
   }
 
   async find(id: string): Promise<AdapterPayload | undefined> {
+    return (await this.findWithExpiry(id))?.payload;
+  }
+
+  /** 同 find，另回傳到期時間（unix ms）；過期的 row 視為不存在。 */
+  async findWithExpiry(id: string): Promise<{ payload: AdapterPayload; expiresAt: number } | undefined> {
     const row = await this.db
       .prepare('SELECT payload, expires_at FROM oauth_models WHERE name = ? AND id = ?')
       .bind(this.name, id)
       .first<{ payload: string; expires_at: number }>();
     if (!row) return undefined;
     if (row.expires_at < Date.now()) return undefined; // lazy delete
-    return JSON.parse(row.payload) as AdapterPayload;
+    return { payload: JSON.parse(row.payload) as AdapterPayload, expiresAt: row.expires_at };
   }
 
   /**

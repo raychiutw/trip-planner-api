@@ -11,6 +11,7 @@ import type { AppEnv } from '../env';
 import { buildRateLimitResponse, oauthErrorResponse } from '../errors';
 import { recordAuthEvent } from '../lib/auth-audit';
 import { generateOpaqueToken } from '../lib/crypto';
+import { readDpopHeader, verifyDpopProof } from '../lib/dpop';
 import { D1Adapter } from '../lib/oauth-d1-adapter';
 import { verifyPassword } from '../lib/password';
 import { bumpRateLimit, checkRateLimit, clientIp, RATE_LIMITS } from '../lib/rate-limit';
@@ -114,6 +115,15 @@ export function registerTokenRoute(app: Hono<AppEnv>): void {
       if (!(await verifyPassword(clientSecret, client.client_secret_hash))) return oauthError('invalid_client', 'Invalid client_secret', 401);
     }
 
+    // DPoP（client 身分確認後才驗，避免密碼錯誤的請求寫入 jti）：帶了 proof 就必須有效（驗證通過才綁定）；client 在強制名單則一定要帶
+    let dpopJkt: string | undefined;
+    const required = (c.env.DPOP_REQUIRED_CLIENTS ?? '').split(',').map((x) => x.trim()).filter(Boolean).includes(clientId);
+    if (readDpopHeader(request) !== null || required) {
+      const dpop = await verifyDpopProof(request, DB);
+      if (!dpop.ok) return oauthError('invalid_dpop_proof', 'Invalid or missing DPoP proof');
+      dpopJkt = dpop.jkt;
+    }
+
     if (grantType === 'client_credentials') {
       if (client.client_type !== 'confidential') {
         return oauthError('unauthorized_client', 'client_credentials grant requires a confidential client', 401);
@@ -132,24 +142,24 @@ export function registerTokenRoute(app: Hono<AppEnv>): void {
       const accessToken = generateOpaqueToken(48);
       await new D1Adapter(DB, 'AccessToken').upsert(
         accessToken,
-        { client_id: clientId, user_id: null, scopes: finalScopes, grantId: crypto.randomUUID() },
+        { client_id: clientId, user_id: null, scopes: finalScopes, grantId: crypto.randomUUID(), ...(dpopJkt ? { cnf: { jkt: dpopJkt } } : {}) },
         ACCESS_TOKEN_TTL_SEC,
       );
       await recordAuthEvent(DB, request, {
         eventType: 'token_issue', outcome: 'success', userId: null, clientId,
         metadata: { grant_type: 'client_credentials', scopes: finalScopes },
       }, c.env);
-      return tokenJson({ access_token: accessToken, token_type: 'Bearer', expires_in: ACCESS_TOKEN_TTL_SEC, scope: finalScopes.join(' ') });
+      return tokenJson({ access_token: accessToken, token_type: dpopJkt ? 'DPoP' : 'Bearer', expires_in: ACCESS_TOKEN_TTL_SEC, scope: finalScopes.join(' ') });
     }
 
     const result = grantType === 'refresh_token'
-      ? await rotateRefreshToken(c.env, request, clientId, body)
-      : await exchangeAuthorizationCode(c.env, request, clientId, body, { requirePkce: client.client_type === 'public' });
+      ? await rotateRefreshToken(c.env, request, clientId, body, { dpopJkt })
+      : await exchangeAuthorizationCode(c.env, request, clientId, body, { requirePkce: client.client_type === 'public', dpopJkt });
     if (!result.ok) return oauthError(result.error, result.description);
     return tokenJson({
       access_token: result.tokens.access_token,
       refresh_token: result.tokens.refresh_token,
-      token_type: 'Bearer',
+      token_type: dpopJkt ? 'DPoP' : 'Bearer',
       expires_in: ACCESS_TOKEN_TTL_SEC,
       scope: result.scopes.join(' '),
     });

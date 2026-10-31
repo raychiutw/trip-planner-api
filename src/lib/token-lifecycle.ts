@@ -26,6 +26,8 @@ interface AuthorizationCodePayload extends AdapterPayload {
   code_challenge_method: 'S256' | null;
   /** Set to grantId of the issued tokens after consume — enables RFC 6749 §10.5 cascade revoke on replay */
   grantId?: string;
+  /** 授權請求時綁定的 DPoP 金鑰指紋（選填）。 */
+  dpop_jkt?: string;
 }
 
 /** Compute SHA-256 hash of code_verifier and base64url encode (per RFC 7636 §4.6). */
@@ -48,6 +50,7 @@ async function issueTokenPair(
   userId: string,
   scopes: string[],
   source: { model: 'AuthorizationCode' | 'RefreshToken'; id: string; grantId?: string },
+  dpopJkt?: string,
 ): Promise<{ access_token: string; refresh_token: string; grantId: string } | null> {
   const grantId = source.grantId ?? crypto.randomUUID();
   // 48 bytes (~64 char base64url) — RFC 6749 doesn't fix length but 32 bytes
@@ -57,7 +60,7 @@ async function issueTokenPair(
 
   const stored = await new D1Adapter(db, source.model).storeIssuedPair(
     source.id,
-    { client_id: clientId, user_id: userId, scopes, grantId },
+    { client_id: clientId, user_id: userId, scopes, grantId, ...(dpopJkt ? { cnf: { jkt: dpopJkt } } : {}) },
     { id: accessToken, expiresIn: ACCESS_TOKEN_TTL_SEC },
     { id: refreshToken, expiresIn: REFRESH_TOKEN_TTL_SEC },
   );
@@ -70,7 +73,7 @@ export async function exchangeAuthorizationCode(
   env: Env, request: Request, clientId: string,
   body: { code?: string; redirect_uri?: string; code_verifier?: string; scope?: string },
   /** public client 一律強制 PKCE（OAuth 2.1）；confidential 沿用「code 有 challenge 才驗」。 */
-  opts: { requirePkce: boolean } = { requirePkce: true },
+  opts: { requirePkce: boolean; dpopJkt?: string } = { requirePkce: true },
 ): Promise<TokenLifecycleResult> {
   const code = body.code;
   if (!code) return failure('invalid_request', 'Missing code');
@@ -90,6 +93,10 @@ export async function exchangeAuthorizationCode(
     return failure('invalid_grant', 'redirect_uri mismatch');
   }
 
+  // 授權時已綁定金鑰（dpop_jkt）：兌換必須由同一把金鑰簽 proof
+  if (typeof codeRow.dpop_jkt === 'string' && codeRow.dpop_jkt !== opts.dpopJkt) {
+    return failure('invalid_grant', 'DPoP key does not match the authorization request');
+  }
   if (opts.requirePkce && !codeRow.code_challenge) {
     return failure('invalid_grant', 'PKCE required');
   }
@@ -146,7 +153,7 @@ export async function exchangeAuthorizationCode(
   }
   // Won the race — issue tokens + bind grantId for replay-revoke。
   const tokens = await issueTokenPair(env.DB, clientId, codeRow.user_id, finalScopes,
-    { model: 'AuthorizationCode', id: code });
+    { model: 'AuthorizationCode', id: code }, opts.dpopJkt);
   if (!tokens) return failure('invalid_grant', 'Authorization code no longer available');
   await recordAuthEvent(env.DB, request, {
     eventType: 'token_issue', outcome: 'success', userId: codeRow.user_id, clientId,
@@ -156,6 +163,7 @@ export async function exchangeAuthorizationCode(
 }
 
 interface RefreshTokenPayload extends AdapterPayload {
+  cnf?: { jkt?: string };
   client_id: string;
   user_id: string;
   scopes: string[];
@@ -167,6 +175,7 @@ interface RefreshTokenPayload extends AdapterPayload {
 export async function rotateRefreshToken(
   env: Env, request: Request, clientId: string,
   body: { refresh_token?: string; scope?: string },
+  opts: { dpopJkt?: string } = {},
 ): Promise<TokenLifecycleResult> {
   const refreshTokenInput = body.refresh_token;
   if (!refreshTokenInput) {
@@ -185,6 +194,12 @@ export async function rotateRefreshToken(
   // revoke = permanent DoS handle on victim。先驗 client_id 再驗 consumed。
   if (refreshRow.client_id !== clientId) {
     return failure('invalid_grant', 'refresh_token does not belong to this client');
+  }
+
+  // 綁定的 refresh token 必須由同一把金鑰簽 proof（不可降級成 Bearer、也不連坐撤銷：原持有者不受影響）
+  const boundJkt = (refreshRow.cnf as { jkt?: unknown } | undefined)?.jkt;
+  if (typeof boundJkt === 'string' && boundJkt !== opts.dpopJkt) {
+    return failure('invalid_grant', 'DPoP proof required for this refresh_token');
   }
 
   // Optional scope downgrade: caller can request narrower scope
@@ -238,6 +253,7 @@ export async function rotateRefreshToken(
     refreshRow.user_id,
     finalScopes,
     { model: 'RefreshToken', id: refreshTokenInput, grantId: refreshRow.grantId },
+    opts.dpopJkt,
   );
   if (!tokens) return failure('invalid_grant', 'refresh_token no longer available');
   await recordAuthEvent(env.DB, request, {

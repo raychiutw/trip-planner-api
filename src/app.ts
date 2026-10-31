@@ -4,8 +4,9 @@ import type { AppEnv } from './env';
 import { AppError, errorResponse } from './errors';
 import { checkHealth, healthRoute } from './health';
 import { cors, requestId, securityHeaders } from './middleware';
+import { DEFAULT_SSE_TIMINGS, registerRequestEventsRoutes, type SseTimings } from './routes/request-events';
 
-export function createApp() {
+export function createApp(opts: { sse?: Partial<SseTimings> } = {}) {
   const app = new OpenAPIHono<AppEnv>({
     // 驗證失敗：只列欄位路徑，不回傳使用者送來的值（可能是密碼或 token）
     defaultHook: (result) => {
@@ -49,6 +50,8 @@ export function createApp() {
     const { code, body } = await checkHealth(c.env);
     return c.json(body, code);
   });
+
+  registerRequestEventsRoutes(app, { ...DEFAULT_SSE_TIMINGS, ...opts.sse });
 
   app.doc('/openapi.json', {
     openapi: '3.1.0',

@@ -12,6 +12,7 @@
 import type { MiddlewareHandler } from 'hono';
 import { AppError, errorResponse } from './errors';
 import type { AppEnv } from './env';
+import { verifyDpopProof } from './lib/dpop';
 import { isFirstPartyClientId } from './lib/first-party';
 import { D1Adapter, type AdapterPayload } from './lib/oauth-d1-adapter';
 import type { AuthData } from './types';
@@ -19,19 +20,21 @@ import type { AuthData } from './types';
 /** 合法 opaque token 的長度上限；超過直接拒絕，不打 DB。 */
 const MAX_TOKEN_LENGTH = 512;
 
-function unauthorized(): Response {
+function unauthorized(scheme: 'Bearer' | 'DPoP' = 'Bearer'): Response {
   const res = errorResponse(new AppError('AUTH_REQUIRED'));
-  res.headers.set('WWW-Authenticate', 'Bearer');
+  res.headers.set('WWW-Authenticate', scheme === 'DPoP' ? 'DPoP algs="ES256"' : 'Bearer');
   return res;
 }
 
-function parseBearer(header: string): string | null {
-  const m = /^Bearer[ \t]+(.*)$/i.exec(header);
-  const token = m?.[1]?.trim();
-  return token && token.length <= MAX_TOKEN_LENGTH ? token : null;
+/** `Authorization: Bearer <token>` 或 `DPoP <token>`（scheme 不分大小寫）。 */
+function parseAuthorization(header: string): { scheme: 'Bearer' | 'DPoP'; token: string } | null {
+  const m = /^(Bearer|DPoP)[ \t]+(.*)$/i.exec(header);
+  const token = m?.[2]?.trim();
+  if (!m || !token || token.length > MAX_TOKEN_LENGTH) return null;
+  return { scheme: m[1]!.toLowerCase() === 'dpop' ? 'DPoP' : 'Bearer', token };
 }
 
-async function resolveToken(db: D1Database, token: string, firstPartyOverride?: string): Promise<AuthData | null> {
+async function resolveToken(db: D1Database, token: string, firstPartyOverride?: string): Promise<{ auth: AuthData; boundJkt: string | null } | null> {
   const row = (await new D1Adapter(db, 'AccessToken').find(token)) as AdapterPayload | undefined;
   if (!row || typeof row !== 'object' || typeof row.client_id !== 'string' || !('user_id' in row)) return null;
 
@@ -39,17 +42,19 @@ async function resolveToken(db: D1Database, token: string, firstPartyOverride?: 
   const scopes = Array.isArray(row.scopes) ? row.scopes.filter((s): s is string => typeof s === 'string') : [];
   const restrictTrip = typeof row.restrict_trip === 'string' ? row.restrict_trip : undefined;
   const isFirstPartyClient = isFirstPartyClientId(clientId, firstPartyOverride);
+  const cnf = row.cnf as { jkt?: unknown } | undefined;
+  const boundJkt = typeof cnf?.jkt === 'string' ? cnf.jkt : null;
 
   if (row.user_id === null) {
     // service token：不繼承任何 email；維運權限靠 ops scope
-    return { email: `service:${clientId}`, userId: null, isServiceToken: true, scopes, clientId, isFirstPartyClient, restrictTrip };
+    return { auth: { email: `service:${clientId}`, userId: null, isServiceToken: true, scopes, clientId, isFirstPartyClient, restrictTrip }, boundJkt };
   }
   if (typeof row.user_id !== 'string') return null;
 
   const user = await db.prepare('SELECT email, status FROM users WHERE id = ?').bind(row.user_id).first<{ email: string; status: string }>();
   // 使用者不存在或被停權 → 拒絕（舊入口是 best-effort 放行；新入口 fail-closed）
   if (!user || user.status !== 'active') return null;
-  return { email: user.email.trim().toLowerCase(), userId: row.user_id, isServiceToken: false, scopes, clientId, isFirstPartyClient, restrictTrip };
+  return { auth: { email: user.email.trim().toLowerCase(), userId: row.user_id, isServiceToken: false, scopes, clientId, isFirstPartyClient, restrictTrip }, boundJkt };
 }
 
 export const bearerAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
@@ -57,15 +62,28 @@ export const bearerAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
   if (header === undefined) return next();
 
   // 帶 Origin 的 Bearer 請求由全域 cors middleware 先擋（不在白名單 → 403），這裡不重複。
-  const token = parseBearer(header);
-  if (!token) return unauthorized();
-  let auth: AuthData | null = null;
+  const parsed = parseAuthorization(header);
+  if (!parsed) return unauthorized();
+  const { scheme, token } = parsed;
+  let resolved: Awaited<ReturnType<typeof resolveToken>> = null;
   try {
-    auth = await resolveToken(c.env.DB, token, (c.env as { TP_REQUEST_CLIENT_ID?: string }).TP_REQUEST_CLIENT_ID);
+    resolved = await resolveToken(c.env.DB, token, (c.env as { TP_REQUEST_CLIENT_ID?: string }).TP_REQUEST_CLIENT_ID);
+    if (resolved) {
+      if (scheme === 'Bearer') {
+        // 綁定金鑰的 token 不可當 Bearer 用（外洩的 token 不能降級）
+        if (resolved.boundJkt) return unauthorized('DPoP');
+      } else {
+        // DPoP scheme 只收綁定的 token，且 proof 的金鑰必須就是綁定的那把
+        if (!resolved.boundJkt) return unauthorized('DPoP');
+        const proof = await verifyDpopProof(c.req.raw, c.env.DB, { accessToken: token });
+        if (!proof.ok || proof.jkt !== resolved.boundJkt) return unauthorized('DPoP');
+      }
+    }
   } catch {
-    auth = null; // fail-closed
+    resolved = null; // fail-closed
   }
-  if (!auth) return unauthorized();
+  if (!resolved) return unauthorized(scheme);
+  const auth = resolved.auth;
   c.set('auth', auth);
   c.set('accessToken', token);
   return next();

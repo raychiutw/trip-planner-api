@@ -1,9 +1,7 @@
 /** 全域 middleware：request id、安全標頭、CORS。順序由 createApp 決定（安全標頭最外層，連錯誤與拒絕回應都套得到）。 */
 import type { MiddlewareHandler } from 'hono';
 import { AppError, errorResponse } from './errors';
-import type { Env } from './env';
-
-type AppEnv = { Bindings: Env; Variables: { requestId: string } };
+import type { AppEnv, Env } from './env';
 
 export const requestId: MiddlewareHandler<AppEnv> = async (c, next) => {
   const id = crypto.randomUUID();

@@ -1,12 +1,12 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { HTTPException } from 'hono/http-exception';
-import type { Env } from './env';
+import type { AppEnv } from './env';
 import { AppError, errorResponse } from './errors';
 import { checkHealth, healthRoute } from './health';
 import { cors, requestId, securityHeaders } from './middleware';
 
 export function createApp() {
-  const app = new OpenAPIHono<{ Bindings: Env; Variables: { requestId: string } }>({
+  const app = new OpenAPIHono<AppEnv>({
     // 驗證失敗：只列欄位路徑，不回傳使用者送來的值（可能是密碼或 token）
     defaultHook: (result) => {
       if (!result.success) {

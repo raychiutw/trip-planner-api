@@ -1,0 +1,11 @@
+name = "trip-planner-api"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+# 骨架階段（T7）先綁 staging D1，只給 /api/health 做 SELECT 1。
+# 正式資料庫與 migration 的歸屬由 T15 處理，切換前不綁 production。
+[[d1_databases]]
+binding = "DB"
+database_name = "trip-planner-db-staging"
+database_id = "53f38e2c-e17d-4961-ba9e-f61e63477ecc"

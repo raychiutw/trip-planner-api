@@ -4,6 +4,7 @@ import type { AppEnv } from './env';
 import { AppError, errorResponse } from './errors';
 import { checkHealth, healthRoute } from './health';
 import { cors, requestId, securityHeaders } from './middleware';
+import { registerTokenRoute } from './routes/token';
 
 export function createApp() {
   const app = new OpenAPIHono<AppEnv>({
@@ -49,6 +50,8 @@ export function createApp() {
     const { code, body } = await checkHealth(c.env);
     return c.json(body, code);
   });
+
+  registerTokenRoute(app);
 
   app.doc('/openapi.json', {
     openapi: '3.1.0',

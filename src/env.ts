@@ -1,3 +1,5 @@
+import type { AuthData } from './types';
+
 /** Worker 的 bindings 與設定。欄位由舊入口（functions/api/_types.ts）移植，隨各票接上才補齊。 */
 export interface Env {
   DB: D1Database;
@@ -15,3 +17,6 @@ export interface Env {
   TRIPLINE_API_URL?: string;
   TRIPLINE_API_SECRET?: string;
 }
+
+/** Hono 的型別參數：bindings 加上 middleware 掛在 context 的變數。 */
+export type AppEnv = { Bindings: Env; Variables: { requestId: string; auth?: AuthData | null } };

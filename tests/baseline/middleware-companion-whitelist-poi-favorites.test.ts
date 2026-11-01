@@ -27,7 +27,7 @@ let api: Api;
 
 beforeAll(async () => {
   db = await createTestDb();
-  api = createApi({ env: mockEnv(db) });
+  api = createApi({ env: mockEnv(db, { ALLOWED_ORIGINS: 'https://trip-planner-dby.pages.dev' }) });
 });
 
 afterAll(disposeMiniflare);
@@ -60,33 +60,28 @@ describe('companion scope — /api/poi-favorites whitelist (§5.3)', () => {
     expect(await blocked('POST', '/api/poi-favorites/123/add-to-trip')).toBe(false);
   });
 
-  // 依賴 middleware：companion 路徑白名單由 requests-ops 組實作
-  it.skip('POST /api/poi-favorites/abc/add-to-trip → 403（id 必須是數字）', async () => {
+  it('POST /api/poi-favorites/abc/add-to-trip → 403（id 必須是數字）', async () => {
     expect(await blocked('POST', '/api/poi-favorites/abc/add-to-trip')).toBe(true);
   });
 
   // [id]/index.ts 只 export onRequestDelete，沒 onRequestGet → 此 path 永遠 405。
   // 原 regex `/^\/api\/poi-favorites(\/\d+)?$/` over-eager 放行不存在的 endpoint，
   // 收緊為 `/^\/api\/poi-favorites$/`（list-only GET）— 避免無謂 attack surface（CSO follow-up）。
-  // 依賴 middleware：companion 路徑白名單由 requests-ops 組實作
-  it.skip('GET  /api/poi-favorites/123 → 403（無 onRequestGet endpoint）', async () => {
+  it('GET  /api/poi-favorites/123 → 403（無 onRequestGet endpoint）', async () => {
     expect(await blocked('GET', '/api/poi-favorites/123')).toBe(true);
   });
 
   // hard cutover：舊 saved-pois 路徑不該再白名單
-  // 依賴 middleware：companion 路徑白名單由 requests-ops 組實作
-  it.skip('POST /api/saved-pois → 403（舊路徑已 cutover）', async () => {
+  it('POST /api/saved-pois → 403（舊路徑已 cutover）', async () => {
     expect(await blocked('POST', '/api/saved-pois')).toBe(true);
   });
 
-  // 依賴 middleware：companion 路徑白名單由 requests-ops 組實作
-  it.skip('DELETE /api/saved-pois/123 → 403（舊路徑已 cutover）', async () => {
+  it('DELETE /api/saved-pois/123 → 403（舊路徑已 cutover）', async () => {
     expect(await blocked('DELETE', '/api/saved-pois/123')).toBe(true);
   });
 
   // 非白名單方法 → 403
-  // 依賴 middleware：companion 路徑白名單由 requests-ops 組實作
-  it.skip('PUT /api/poi-favorites → 403（method 不在白名單）', async () => {
+  it('PUT /api/poi-favorites → 403（method 不在白名單）', async () => {
     expect(await blocked('PUT', '/api/poi-favorites')).toBe(true);
   });
 });

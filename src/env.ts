@@ -23,6 +23,8 @@ export interface Env {
   DEV_MOCK_EMAIL?: string;
   /** auth_audit_log／session 的 IP 雜湊用 HMAC key。 */
   OAUTH_SIGNING_PRIVATE_KEY?: string;
+  /** 獨立驗證過的 HTTPS app-link callback（mobile 帳號刪除重新驗證完成後導回），依環境各自設定。 */
+  MOBILE_OAUTH_CALLBACK_URL?: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
   RESEND_API_KEY?: string;

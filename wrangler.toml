@@ -23,6 +23,8 @@ ENVIRONMENT = "production"
 PUBLIC_ORIGIN = "https://trip-planner-api-production.lean-lean.workers.dev"
 WEB_ORIGIN = "https://trip-planner-dby.pages.dev"
 ALLOWED_ORIGINS = "https://trip-planner-dby.pages.dev"
+# 帳號刪除的 Google 重新驗證完成後導回的 mobile app link（須與 src/lib/mobile-oauth.ts 的 production 契約一致）
+MOBILE_OAUTH_CALLBACK_URL = "https://mobile-callback.trip-planner-dby.pages.dev/oauth/callback"
 
 [[env.production.d1_databases]]
 binding = "DB"

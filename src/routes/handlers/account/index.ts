@@ -9,11 +9,14 @@
  *
  * Body（擇一）:
  *   { password: string }  — 帳號有 local 密碼身分時**必須**帶，做二次確認
- *   { confirm: 'DELETE' } — 純 OAuth 帳號（無 password_hash）沒有密碼可打，改用確認字串
+ *   { confirm: 'DELETE', challengeId: string } — 無密碼帳號：確認字串之外，還要先完成同帳號的近期 Google 重新驗證
+ *     （POST /api/account/delete-reauth 建立 challenge → 使用者在 Google 驗證 → challenge 變 verified）。
+ *     **fail-closed**：只帶 confirm、沒有 verified challenge → 403 ACCOUNT_DELETE_REAUTH_REQUIRED。
+ *     新 api 沒有 cookie session，舊入口「瀏覽器 proof」那條不存在，所以非 mobile client 的無密碼帳號一律走不通。
  *
  * Response 200: { ok: true, tripsDeleted, auditRowsAnonymized, tablesCleared }
- *   同時清除該使用者在 oauth_models 的所有 token／授權（新 api 無 cookie；
- *   即使清除失敗，bearer 認證也會因使用者不存在而拒絕，所以不會讓已刪帳號繼續可用）。
+ *   token／授權／challenge 在同一個 D1 batch 內清除（eraseUserAccount）；抹除失敗整批回滾，
+ *   challenge 由 used 還原為 verified，可在有效期內重試。
  *
  * ⚠ 這是**不可逆**操作。二次確認不是形式：owner 決策為「擁有的行程一併刪除，
  *   含共編者的」，誤觸的代價是別人的資料也沒了。
@@ -26,14 +29,17 @@ import { AppError } from '../../../errors';
 import { rawJson } from '../../../lib/utils';
 import { verifyPassword } from '../../../lib/password';
 import { eraseUserAccount } from '../../../lib/erasure';
+import { mobileOAuthContract } from '../../../lib/mobile-oauth';
+import { readMobileDeleteChallenge, transitionMobileDeleteChallenge } from '../../../lib/delete-reauth';
 import type { Env } from '../../../env';
 
 interface DeleteAccountBody {
   password?: unknown;
   confirm?: unknown;
+  challengeId?: unknown;
 }
 
-/** 純 OAuth 帳號用的確認字串。刻意用英文大寫，避免輸入法誤觸。 */
+/** 純 OAuth 帳號的確認字串（另需近期 Google 重新驗證，只打這個不夠）。刻意用英文大寫，避免輸入法誤觸。 */
 const CONFIRM_PHRASE = 'DELETE';
 
 /**
@@ -57,13 +63,17 @@ async function findLocalPasswordHash(env: Env, userId: string): Promise<string |
  * 確認對話框必須誠實顯示「按下去會發生什麼」。owner 決策是**行程一併刪除，含共編者的**，
  * 所以受影響的共編人數一定要先讓使用者看到 —— 這個數字前端算不出來，只能後端查。
  *
- * Response: { hasPassword, tripsOwned, collaboratorsAffected }
+ * Response: { hasPassword, reauthProvider, reauthenticated, tripsOwned, collaboratorsAffected }
+ *   - reauthProvider：無密碼帳號可用的重新驗證 provider（目前只有 'google'）；有密碼或沒有 Google 身分時為 null
+ *   - reauthenticated：新 api 沒有瀏覽器 proof，證明在 challenge 上，這裡恆為 false（欄位為與舊入口的 wire 相容而保留）
  */
 export const onRequestGet: PagesFunction<Env> = async (context) => {
   const session = await requireAccountUser(context);
   const userId = session.uid;
 
   const hasPassword = (await findLocalPasswordHash(context.env, userId)) !== null;
+  const googleIdentity = hasPassword ? null : await context.env.DB
+    .prepare("SELECT 1 FROM auth_identities WHERE user_id = ? AND provider = 'google'").bind(userId).first();
 
   const owned = await context.env.DB
     .prepare('SELECT count(*) AS n FROM trips WHERE owner_user_id = ?')
@@ -84,15 +94,17 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
 
   return rawJson({
     hasPassword,
+    reauthProvider: googleIdentity ? 'google' : null,
+    reauthenticated: false,
     tripsOwned: owned?.n ?? 0,
     collaboratorsAffected: collab?.n ?? 0,
   });
 };
 
 export const onRequestDelete: PagesFunction<Env> = async (context) => {
-  const session = await requireAccountUser(context);
-  // SessionPayload 的欄位是 `uid`（不是 userId）—— 對齊 account/sessions.ts。
-  const userId = session.uid;
+  const actor = await requireAccountUser(context);
+  const userId = actor.uid;
+  const grant = { grantId: actor.auth.grantId, clientId: actor.auth.clientId };
 
   let body: DeleteAccountBody = {};
   try {
@@ -115,29 +127,34 @@ export const onRequestDelete: PagesFunction<Env> = async (context) => {
       throw new AppError('ACCOUNT_DELETE_PASSWORD_INVALID');
     }
   } else {
-    // 純 OAuth 帳號沒有密碼可打，改要求顯式確認字串。
+    // 顯式確認防誤觸；近期 Google 身分驗證才是刪除授權。
     if (body.confirm !== CONFIRM_PHRASE) {
       throw new AppError(
         'ACCOUNT_DELETE_CONFIRM_REQUIRED',
         `請輸入 ${CONFIRM_PHRASE} 以確認刪除`,
       );
     }
+    // fail-closed：沒有 verified、同帳號、同 grant、與環境相符 client 的 challenge 就不放行。
+    const challengeId = typeof body.challengeId === 'string' ? body.challengeId : '';
+    const contract = mobileOAuthContract(context.env, context.request);
+    const challenge = challengeId ? await readMobileDeleteChallenge(context.env.DB, challengeId) : null;
+    if (!contract || !challenge || !grant.grantId || grant.clientId !== contract.clientId ||
+        challenge.uid !== userId || challenge.grantId !== grant.grantId ||
+        challenge.clientId !== contract.clientId || challenge.expired ||
+        !(await transitionMobileDeleteChallenge(context.env.DB, challengeId, userId, grant.grantId, 'verified', 'used'))) {
+      throw new AppError('ACCOUNT_DELETE_REAUTH_REQUIRED');
+    }
   }
 
-  const summary = await eraseUserAccount(context.env.DB, userId);
-
-  // 帳號已不存在：連同 token／授權（AccessToken、RefreshToken、Consent…）一併清掉。
-  // oauth_models 無 users 外鍵，user_id 在 payload 內（有 json_extract 索引）。
+  let summary;
   try {
-    const purged = await context.env.DB
-      .prepare(`DELETE FROM oauth_models WHERE json_extract(payload, '$.user_id') = ?`)
-      .bind(userId)
-      .run();
-    const n = purged.meta?.changes ?? 0;
-    if (n > 0) summary.tablesCleared['oauth_models'] = n;
-  } catch (err) {
-    // 帳號已刪除；bearer 認證在使用者不存在時一律拒絕，殘留 token 無法使用，由過期清理收掉。
-    console.error('[account delete] oauth_models purge failed', err instanceof Error ? err.message : String(err));
+    summary = await eraseUserAccount(context.env.DB, userId);
+  } catch (error) {
+    // D1 batch 已整批回滾，帳號仍完整；還原同一份 fresh-auth 證明，使用者可在有效期內重試。
+    if (!passwordHash && grant.grantId && typeof body.challengeId === 'string') {
+      await transitionMobileDeleteChallenge(context.env.DB, body.challengeId, userId, grant.grantId, 'used', 'verified');
+    }
+    throw error;
   }
 
   return rawJson({

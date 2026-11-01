@@ -105,9 +105,11 @@ export const OauthMisc_UserInfo = z.object({
 }).openapi('OauthMisc_UserInfo');
 
 export const OauthMisc_LoginGoogleQuery = z.object({
-  client_id: z.string(),
-  redirect_uri: z.string(),
-  code_challenge: z.string().openapi({ description: 'S256，必填' }),
+  purpose: z.literal('account-delete').optional().openapi({ description: '帳號刪除的 Google 重新驗證：帶 purpose=account-delete 與 challenge，其餘參數不需要（見 /api/account/delete-reauth）' }),
+  challenge: z.string().optional().openapi({ description: 'purpose=account-delete 時必填：POST /api/account/delete-reauth 發出的 challengeId' }),
+  client_id: z.string().optional().openapi({ description: '一般登入必填' }),
+  redirect_uri: z.string().optional().openapi({ description: '一般登入必填' }),
+  code_challenge: z.string().optional().openapi({ description: '一般登入必填；S256' }),
   code_challenge_method: z.string().optional(),
   state: z.string().optional(),
   scope: z.string().optional(),

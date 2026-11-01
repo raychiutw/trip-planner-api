@@ -7,10 +7,11 @@ import type { z } from '@hono/zod-openapi';
 import { createTestDb, disposeMiniflare } from '../baseline/setup';
 import { mockEnv, seedTrip } from '../baseline/helpers';
 import { createApi, type Api } from '../baseline/http';
+import { seedInvitation, INVITE_SECRET } from '../baseline/invitations-http';
 import { D1Adapter } from '../../src/lib/oauth-d1-adapter';
 import { sha256Base64 } from '../../src/lib/utils';
 import { ApiError } from '../../src/schemas/common';
-import { expectContract } from './support';
+import { expectContract, contractIssues } from './support';
 import * as S from '../../src/schemas/signup';
 
 type Z = z.ZodTypeAny;
@@ -61,8 +62,23 @@ function freshIp(): string {
   ips.push(ip);
   return ip;
 }
+/** 請求 body 的文件 schema（與路由 docs.body 同一份）；文件不在執行期驗證，所以測試自己驗送出的 body。 */
+const BODY: Record<string, Z> = {
+  '/api/oauth/signup': S.Signup_SignupBody,
+  '/api/oauth/verify': S.Signup_VerifyBody,
+  '/api/oauth/send-verification': S.Signup_EmailBody,
+  '/api/oauth/forgot-password': S.Signup_EmailBody,
+  '/api/oauth/reset-password': S.Signup_ResetPasswordBody,
+};
+/** 送出前先確認 body 符合文件 schema（含有值的選填欄位型別）。 */
+const sent = <T>(schema: Z, body: T): T => { expectContract(schema, body); return body; };
 const post = (path: string, json: unknown, ip = freshIp(), extra: Record<string, string> = {}) =>
-  api.request('POST', path, { json, headers: { 'CF-Connecting-IP': ip, ...extra } });
+  api.request('POST', path, { json: sent(BODY[path]!, json), headers: { 'CF-Connecting-IP': ip, ...extra } });
+/** 對照組：文件的 body schema 判定不合法，handler 也實際拒絕（呼叫端再斷言 handler 的拒絕）。 */
+const postBad = (path: string, json: unknown, ip = freshIp()) => {
+  expect(contractIssues(BODY[path]!, json).length, `文件 schema 應判定不合法：${JSON.stringify(json)}`).toBeGreaterThan(0);
+  return api.request('POST', path, { json, headers: { 'CF-Connecting-IP': ip } });
+};
 
 async function lock(key: string) {
   await db.prepare('INSERT OR REPLACE INTO rate_limit_buckets (bucket_key, count, window_start, locked_until) VALUES (?, 99, ?, ?)')
@@ -88,7 +104,7 @@ async function seedShare(tripId: string, body: Record<string, unknown> = {}): Pr
 
 beforeAll(async () => {
   db = await createTestDb();
-  api = createApi({ env: mockEnv(db) });
+  api = createApi({ env: mockEnv(db, { SESSION_SECRET: INVITE_SECRET }) });
   doc = (await (await api.get('/openapi.json')).json()) as typeof doc;
 }, 30_000);
 
@@ -157,8 +173,32 @@ describe('POST /api/oauth/signup', () => {
     expect(res.headers.get('set-cookie')).toBeNull();
   });
 
+  it('201：帶 invitationToken 且邀請有效 → joinedTrip 有值、invitationError 為 null', async () => {
+    const t = await seedTrip(db, { id: `sgc-inv-trip-${++seq}`, owner: ownerEmail, days: 1 });
+    tripIds.push(t.id);
+    const email = `sgc-signup-inv-${++seq}@test.com`;
+    await seedInvitation(db, { tripId: t.id, token: `sgc-inv-${seq}`, invitedEmail: email, invitedBy: ownerEmail, expiresAt: new Date(Date.now() + 86_400_000).toISOString() });
+    const res = await post('/api/oauth/signup', { ...good(email), displayName: 'Invitee', invitationToken: `sgc-inv-${seq}` });
+    const body = (await check(R, res, 201, S.Signup_SignupResult)) as { joinedTrip: { id: string; title: string } | null; invitationError: string | null };
+    expect(body.joinedTrip?.id).toBe(t.id);
+    expect(typeof body.joinedTrip?.title).toBe('string');
+    expect(body.invitationError).toBeNull();
+  });
+
+  it('201：邀請無效 → joinedTrip 為 null、invitationError 有值（字串）', async () => {
+    const res = await post('/api/oauth/signup', { ...good(`sgc-signup-badinv-${++seq}@test.com`), invitationToken: 'bogus' });
+    const body = (await check(R, res, 201, S.Signup_SignupResult)) as { joinedTrip: unknown; invitationError: string | null };
+    expect(body.joinedTrip).toBeNull();
+    expect(body.invitationError).toBe('INVITATION_INVALID');
+  });
+
+  it('400：密碼太短（文件 body schema 同樣判定不合法）', async () => {
+    const res = await postBad('/api/oauth/signup', { ...good(`sgc-signup-sp-${++seq}@test.com`), password: 'short' });
+    expect(((await check(R, res, 400, ApiError)) as { error: { code: string } }).error.code).toBe('SIGNUP_PASSWORD_TOO_SHORT');
+  });
+
   it('400：未同意個資條款', async () => {
-    const res = await post('/api/oauth/signup', { email: `sgc-signup-nc-${++seq}@test.com`, password: 'correct-horse-9' });
+    const res = await postBad('/api/oauth/signup', { email: `sgc-signup-nc-${++seq}@test.com`, password: 'correct-horse-9' });
     const body = (await check(R, res, 400, ApiError)) as { error: { code: string } };
     expect(body.error.code).toBe('SIGNUP_CONSENT_REQUIRED');
   });
@@ -244,7 +284,7 @@ describe('verify', () => {
     await check(R, await post('/api/oauth/verify', { token }), 200, S.Signup_OkOnly);
     expect(((await check(R, await post('/api/oauth/verify', { token }), 400, S.Signup_VerifyError)) as { error: string }).error).toBe('used');
     expect(((await check(R, await post('/api/oauth/verify', { token: 'sgc-nope' }), 400, S.Signup_VerifyError)) as { error: string }).error).toBe('expired');
-    expect(((await check(R, await post('/api/oauth/verify', {}), 400, S.Signup_VerifyError)) as { error: string }).error).toBe('missing_token');
+    expect(((await check(R, await postBad('/api/oauth/verify', {}), 400, S.Signup_VerifyError)) as { error: string }).error).toBe('missing_token');
   });
 
   it('GET 302 導向 /login（舊連結）', async () => {
@@ -263,7 +303,7 @@ describe('POST /api/oauth/reset-password', () => {
     await new D1Adapter(db, 'PasswordReset').upsert(token, { userId: u.id, email: u.email, createdAt: Date.now(), used: false }, 3600);
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })));
     await check(R, await post('/api/oauth/reset-password', { token, password: 'brand-new-pass-1' }), 200, S.Signup_GenericMessage);
-    expect(((await check(R, await post('/api/oauth/reset-password', { password: 'brand-new-pass-1' }), 400, ApiError)) as { error: { code: string } }).error.code).toBe('RESET_TOKEN_MISSING');
+    expect(((await check(R, await postBad('/api/oauth/reset-password', { password: 'brand-new-pass-1' }), 400, ApiError)) as { error: { code: string } }).error.code).toBe('RESET_TOKEN_MISSING');
     expect(((await check(R, await post('/api/oauth/reset-password', { token: 'sgc-bad', password: 'brand-new-pass-1' }), 400, ApiError)) as { error: { code: string } }).error.code).toBe('RESET_TOKEN_INVALID');
     const ip = freshIp();
     await lock(`reset-password:${ip}`);
@@ -283,10 +323,15 @@ describe('分享', () => {
 
   it('POST /shares 200（不是 201）、GET 列表、PATCH 三種 action、DELETE', async () => {
     const base = `/api/trips/${tripId}/shares`;
-    const created = await api.request('POST', base, { as: ownerEmail, json: { label: 'L', visibleSections: ['flights', 'bogus'], anonymous: true, expiresAt: Date.now() + 86_400_000 } });
+    const created = await api.request('POST', base, { as: ownerEmail, json: sent(S.Signup_ShareCreateBody, { label: 'L', visibleSections: ['flights'], anonymous: true, expiresAt: Date.now() + 86_400_000 }) });
     const c = (await check('POST /api/trips/:id/shares', created, 200, S.Signup_ShareCreated)) as { id: number; visibleSections: string[] };
     expect(c.visibleSections).toEqual(['flights']);
-    const defaults = await api.request('POST', base, { as: ownerEmail, json: {} });
+    // 對照：未知 section 文件判定不合法，handler 也實際濾掉（不報錯）
+    const bogusBody = { visibleSections: ['flights', 'bogus'] };
+    expect(contractIssues(S.Signup_ShareCreateBody, bogusBody).length).toBeGreaterThan(0);
+    const filtered = await api.request('POST', base, { as: ownerEmail, json: bogusBody });
+    expect(((await check('POST /api/trips/:id/shares', filtered, 200, S.Signup_ShareCreated)) as { visibleSections: string[] }).visibleSections).toEqual(['flights']);
+    const defaults = await api.request('POST', base, { as: ownerEmail, json: sent(S.Signup_ShareCreateBody, {}) });
     await check('POST /api/trips/:id/shares', defaults, 200, S.Signup_ShareCreated);
 
     const list = await api.get(base, { as: ownerEmail });
@@ -295,13 +340,18 @@ describe('分享', () => {
 
     const P = 'PATCH /api/trips/:id/shares/:shareId';
     const patch = (body: unknown, id = c.id, t = tripId, as = ownerEmail) => api.request('PATCH', `/api/trips/${t}/shares/${id}`, { as, json: body });
-    await check(P, await patch({ action: 'update', label: 'x', visibleSections: ['lodgings'], anonymous: false, expiresAt: null }), 200, S.Signup_SharePatchResult);
-    await check(P, await patch({ action: 'rotate' }), 200, S.Signup_SharePatchResult);
+    const upd = (body: Record<string, unknown>) => patch(sent(S.Signup_SharePatchBody, body));
+    await check(P, await upd({ action: 'update', label: 'x', visibleSections: ['lodgings'], anonymous: false, expiresAt: null }), 200, S.Signup_SharePatchResult);
+    await check(P, await upd({ action: 'rotate' }), 200, S.Signup_SharePatchResult);
+    expect(contractIssues(S.Signup_SharePatchBody, { action: 'bogus' }).length).toBeGreaterThan(0); // 對照：文件也判定不合法
     expect(((await check(P, await patch({ action: 'bogus' }), 400, ApiError)) as { error: { code: string } }).error.code).toBe('DATA_VALIDATION');
-    await check(P, await patch({ action: 'update' }), 400, ApiError);
-    await check(P, await patch({ action: 'revoke' }), 200, S.Signup_SharePatchResult);
-    expect(((await check(P, await patch({ action: 'revoke' }), 404, ApiError)) as { error: { code: string } }).error.code).toBe('DATA_NOT_FOUND');
-    await check(P, await patch({ action: 'rotate' }), 404, ApiError);
+    await check(P, await upd({ action: 'update' }), 400, ApiError); // schema 合法但 handler 拒絕（沒有可更新欄位）
+    await check(P, await upd({ action: 'revoke' }), 200, S.Signup_SharePatchResult);
+    expect(((await check(P, await upd({ action: 'revoke' }), 404, ApiError)) as { error: { code: string } }).error.code).toBe('DATA_NOT_FOUND');
+    await check(P, await upd({ action: 'rotate' }), 404, ApiError);
+    // 已撤銷的連結仍在列表中，revokedAt 有值（字串）
+    const afterRevoke = (await check('GET /api/trips/:id/shares', await api.get(base, { as: ownerEmail }), 200, S.Signup_ShareList)) as { shares: Array<{ id: number; revokedAt: string | null }> };
+    expect(typeof afterRevoke.shares.find((x) => x.id === c.id)?.revokedAt).toBe('string');
 
     const D = 'DELETE /api/trips/:id/shares/:shareId';
     const del = (id: number, as = ownerEmail) => api.request('DELETE', `/api/trips/${tripId}/shares/${id}`, { as });

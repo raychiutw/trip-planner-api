@@ -132,7 +132,7 @@ describe('POST /api/pois/find-or-create — PR39', () => {
 });
 
 // 依賴 trips／entry-pois 組的 /api/trips/:id/entries/:eid/trip-pois 路由（不在本組，此處尚未登記）
-describe.skip('POST /api/trips/:id/entries/:eid/trip-pois — PR39', () => {
+describe('POST /api/trips/:id/entries/:eid/trip-pois — PR39', () => {
   let dayId: number;
   let entryId: number;
 

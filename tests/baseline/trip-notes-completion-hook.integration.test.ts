@@ -364,7 +364,6 @@ describe('PATCH /requests/:id — notes generation completion hook', () => {
       await seedTrip(db, { id: authTrip, owner: ownerEmail });
       const { requestId } = await createJobAndRequest('tips', authTrip);
       expect((await api.request('PATCH', `/api/requests/${requestId}`, {
-        headers: { Origin: 'https://trip-planner-dby.pages.dev' }, // 通過 CSRF Origin 檢查，才輪到認證
         json: { status: 'failed' },
       })).status).toBe(401);
     });

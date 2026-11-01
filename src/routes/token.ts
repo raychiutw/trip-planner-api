@@ -9,6 +9,7 @@
 import type { Hono } from 'hono';
 import type { AppEnv } from '../env';
 import { buildRateLimitResponse, oauthErrorResponse } from '../errors';
+import { MOBILE_GATE_MESSAGE, mobileClientAllowed } from '../lib/mobile-oauth';
 import { recordAuthEvent } from '../lib/auth-audit';
 import { generateOpaqueToken } from '../lib/crypto';
 import { readDpopHeader, verifyDpopProof } from '../lib/dpop';
@@ -98,6 +99,10 @@ export function registerTokenRoute(app: Hono<AppEnv>): void {
     const clientId = basic?.id ?? body.client_id;
     const clientSecret = basic?.secret ?? body.client_secret;
     if (!clientId) return oauthError('invalid_client', 'Missing client_id');
+    // mobile client 的環境閘門（自舊入口移植）：client 與環境相符；authorization_code 的 redirect_uri 必須是該環境的精確 callback
+    if (!mobileClientAllowed(c.env, request, clientId, grantType === 'authorization_code' ? (body.redirect_uri ?? null) : undefined)) {
+      return oauthError('invalid_client', MOBILE_GATE_MESSAGE);
+    }
 
     const client = await DB.prepare(
       'SELECT client_id, client_type, client_secret_hash, status, allowed_scopes FROM client_apps WHERE client_id = ?',

@@ -26,3 +26,19 @@ export function mobileOAuthContract(env: Env, request: Request): { clientId: str
   }
   return null;
 }
+
+export function isMobileClientId(clientId: string): boolean {
+  return clientId === 'tripline-mobile' || clientId === 'tripline-mobile-uat' || clientId === 'tripline-mobile-dev';
+}
+
+/**
+ * authorize／approve／token 共用的環境閘門：mobile client 必須與環境相符，redirect_uri（有帶時）必須是該環境的精確 callback。
+ * 非 mobile client 恆為 true（不影響既有 client）。
+ */
+export function mobileClientAllowed(env: Env, request: Request, clientId: string, redirectUri?: string | null): boolean {
+  if (!isMobileClientId(clientId)) return true;
+  const contract = mobileOAuthContract(env, request);
+  return !!contract && clientId === contract.clientId && (redirectUri === undefined || redirectUri === contract.redirectUri);
+}
+
+export const MOBILE_GATE_MESSAGE = 'Mobile client or callback is not allowed in this environment';

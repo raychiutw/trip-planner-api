@@ -4,6 +4,8 @@
  * 而且 development 沒設定時以 contract 的 dev 值為預設，本機才跑得了 mobile 的刪除流程。
  */
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { mobileCallbackUrl } from '../../src/lib/delete-reauth';
 import { MOBILE_DEV_REDIRECT, MOBILE_PROD_REDIRECT, MOBILE_UAT_REDIRECT, mobileOAuthContract } from '../../src/lib/mobile-oauth';
 import type { Env } from '../../src/env';
@@ -66,5 +68,24 @@ describe('mobileOAuthContract：精確的 issuer／client／redirect 組合', ()
     expect(mobileOAuthContract(env({ ENVIRONMENT: 'development' }), at('http://localhost:8788'))).toEqual({ clientId: 'tripline-mobile-dev', redirectUri: MOBILE_DEV_REDIRECT });
     expect(mobileOAuthContract(env({ ENVIRONMENT: 'development' }), at('http://evil.example'))).toBeNull();
     expect(mobileOAuthContract(env({}), at('http://localhost:8788'))).toBeNull();
+  });
+});
+
+describe('wrangler.toml 的 callback 設定與環境契約一致', () => {
+  const toml = readFileSync(path.join(__dirname, '../../wrangler.toml'), 'utf8');
+  const [top, prod] = toml.split('[env.production]');
+  const val = (src: string, key: string) => new RegExp(`^${key}\\s*=\\s*"([^"]*)"`, 'm').exec(src)?.[1];
+
+  it('staging（頂層 [vars]）：preview 環境、明確的 PUBLIC_ORIGIN、UAT callback，且通過 mobileCallbackUrl 驗證', () => {
+    expect(val(top!, 'ENVIRONMENT')).toBe('preview');
+    expect(val(top!, 'PUBLIC_ORIGIN')).toMatch(/^https:\/\//);
+    expect(val(top!, 'MOBILE_OAUTH_CALLBACK_URL')).toBe(MOBILE_UAT_REDIRECT);
+    expect(mobileCallbackUrl({ ENVIRONMENT: 'preview', MOBILE_OAUTH_CALLBACK_URL: val(top!, 'MOBILE_OAUTH_CALLBACK_URL') }).toString()).toBe(MOBILE_UAT_REDIRECT);
+  });
+
+  it('production：callback 是 production 的 app link，且 staging 與 production 不共用', () => {
+    expect(val(prod!, 'ENVIRONMENT')).toBe('production');
+    expect(val(prod!, 'MOBILE_OAUTH_CALLBACK_URL')).toBe(MOBILE_PROD_REDIRECT);
+    expect(val(prod!, 'PUBLIC_ORIGIN')).not.toBe(val(top!, 'PUBLIC_ORIGIN'));
   });
 });

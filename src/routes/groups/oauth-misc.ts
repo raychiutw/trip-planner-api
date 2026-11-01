@@ -1,3 +1,4 @@
+import { z } from '@hono/zod-openapi';
 import type { OpenAPIHono } from '@hono/zod-openapi';
 import type { AppEnv } from '../../env';
 import { legacyRoute } from '../../legacy';
@@ -39,7 +40,7 @@ export function registerOauthMiscRoutes(app: OpenAPIHono<AppEnv>): void {
   legacyRoute(app, { method: 'get', path: '/api/oauth/authorize', auth: 'none', handler: authorizeGet, summary: '第三方授權入口（存 AuthRequest 並導向 web）',
     docs: { query: OauthMisc_AuthorizeQuery, responses: {
       302: { description: '通過驗證：Location 為 `${WEB_ORIGIN}/oauth/authorize?request_id=<id>`；可導回 client 的驗證錯誤：Location 為 redirect_uri?error=...&error_description=...&state=...（無 JSON 內容）' },
-      400: oerr('client／redirect_uri 有問題（不可導回 client），或 WEB_ORIGIN／PUBLIC_ORIGIN 未設定（server_error）'),
+      400: oerr('client／redirect_uri 有問題（不可導回 client）；mobile client（tripline-mobile／-uat／-dev）與環境或精確 callback 不符（unauthorized_client）；或 WEB_ORIGIN／PUBLIC_ORIGIN 未設定（server_error）'),
     } } });
   legacyRoute(app, { method: 'get', path: '/api/oauth/authorize/requests/:id', auth: 'required', handler: authRequestGet, summary: '授權請求的同意畫面資料',
     docs: { responses: {
@@ -50,7 +51,7 @@ export function registerOauthMiscRoutes(app: OpenAPIHono<AppEnv>): void {
     } } });
   const decide = (verb: string) => ({ responses: {
     200: { description: `${verb}：回帶 code 或 error 的 redirect_to（由 server 端存的 redirect_uri 組成）`, schema: OauthMisc_RedirectTo },
-    400: err('授權請求不存在、已過期、已使用，或 client 已停用（DATA_VALIDATION）'),
+    400: { description: '授權請求不存在、已過期、已使用，或 client 已停用（DATA_VALIDATION，ApiError 形狀）；mobile client 與環境不符（unauthorized_client，OAuth 扁平形狀，且該授權請求已被消耗）', schema: z.union([ApiError, OauthMisc_OAuthError]) },
     401: err('沒有有效 bearer'),
     403: err('service token 沒有使用者身份（PERM_DENIED）'),
   } });

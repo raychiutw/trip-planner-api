@@ -13,7 +13,7 @@
  * - 'optional'：有帶就驗（無效 → 401），沒帶 auth=null，由 handler 自己決定（公開讀取但需權限檢查的端點）。
  * - 'none'：完全公開，不看 Authorization，auth 恆為 null。
  */
-import { createRoute, z } from '@hono/zod-openapi';
+import { z } from '@hono/zod-openapi';
 import type { OpenAPIHono } from '@hono/zod-openapi';
 import type { MiddlewareHandler } from 'hono';
 import { bearerAuth, optionalAuth, requireAuth } from './auth';
@@ -41,6 +41,22 @@ export interface LegacyRouteSpec {
   auth: AuthMode;
   handler: LegacyHandler;
   summary?: string;
+  /**
+   * OpenAPI 文件用的請求／回應 schema（T19 產生 client 的依據）。**只做文件，不在執行期驗證**——
+   * 驗證仍由舊 handler 自己負責，否則會改變既有的錯誤行為。沒給就用預設（200、內容任意）。
+   */
+  docs?: LegacyRouteDocs;
+}
+
+export interface LegacyRouteDocs {
+  /** query 參數（z.object）。 */
+  query?: z.ZodObject<z.ZodRawShape>;
+  /** JSON 請求 body。 */
+  body?: z.ZodTypeAny;
+  /** body 是否必填（預設 true）；handler 自己決定要不要 body 的端點（body 為選填）請設 false。 */
+  bodyRequired?: boolean;
+  /** 各狀態碼的回應；schema 沒給代表沒有固定的 JSON 內容（例如 302、204）。 */
+  responses?: Record<number, { description: string; schema?: z.ZodTypeAny }>;
 }
 
 const MIDDLEWARE: Record<AuthMode, MiddlewareHandler<AppEnv>[]> = {
@@ -53,18 +69,36 @@ const MIDDLEWARE: Record<AuthMode, MiddlewareHandler<AppEnv>[]> = {
 const toOpenApiPath = (p: string) => p.replace(/:([A-Za-z0-9_]+)/g, '{$1}');
 const paramNames = (p: string) => [...p.matchAll(/:([A-Za-z0-9_]+)/g)].map((m) => m[1]!);
 
+const SECURITY: Record<AuthMode, Array<Record<string, string[]>> | undefined> = {
+  required: [{ bearerAuth: [] }],
+  optional: [{ bearerAuth: [] }, {}],
+  none: undefined,
+};
+
 export function legacyRoute(app: OpenAPIHono<AppEnv>, spec: LegacyRouteSpec): void {
   const names = paramNames(spec.path);
-  const route = createRoute({
+  const docs = spec.docs;
+
+  // 文件：只登記，不掛驗證（路由本身用純 Hono 登記，行為與舊入口一致）
+  const responses = docs?.responses
+    ? Object.fromEntries(Object.entries(docs.responses).map(([code, r]) => [code, r.schema
+        ? { description: r.description, content: { 'application/json': { schema: r.schema } } }
+        : { description: r.description }]))
+    : { 200: { description: 'OK（回應內容依端點而定）', content: { 'application/json': { schema: z.any() } } } };
+  app.openAPIRegistry.registerPath({
     method: spec.method,
     path: toOpenApiPath(spec.path),
     summary: spec.summary,
-    middleware: MIDDLEWARE[spec.auth],
-    ...(names.length ? { request: { params: z.object(Object.fromEntries(names.map((n) => [n, z.string()]))) } } : {}),
-    responses: { 200: { description: 'OK（回應內容依端點而定）', content: { 'application/json': { schema: z.any() } } } },
+    ...(SECURITY[spec.auth] ? { security: SECURITY[spec.auth] } : {}),
+    request: {
+      ...(names.length ? { params: z.object(Object.fromEntries(names.map((n) => [n, z.string()]))) } : {}),
+      ...(docs?.query ? { query: docs.query } : {}),
+      ...(docs?.body ? { body: { required: docs.bodyRequired ?? true, content: { 'application/json': { schema: docs.body } } } } : {}),
+    },
+    responses,
   });
 
-  app.openapi(route, (async (c: import('hono').Context<AppEnv>) => {
+  const handler = (async (c: import('hono').Context<AppEnv>) => {
     const pending: Promise<unknown>[] = [];
     const context: LegacyContext = {
       request: c.req.raw,
@@ -80,5 +114,8 @@ export function legacyRoute(app: OpenAPIHono<AppEnv>, spec: LegacyRouteSpec): vo
     const response = await (spec.handler as (c: LegacyContext) => Response | Promise<Response>)(context);
     if (pending.length) await Promise.allSettled(pending);
     return response;
-  }) as never);
+  });
+
+  // Hono 的多載型別不接受「展開的 middleware 陣列」，這裡以最窄的簽章呼叫（保留 this）
+  (app[spec.method] as unknown as (path: string, ...h: unknown[]) => unknown).call(app, spec.path, ...MIDDLEWARE[spec.auth], handler);
 }

@@ -194,65 +194,157 @@ describe('只有第一方 client 可以用', () => {
   });
 });
 
-describe('限流', () => {
-  const failFor = (n: number, mk: (i: number) => { over: Record<string, unknown>; ip: string }) =>
-    Promise.all(Array.from({ length: n }, () => 0)).then(async () => {
-      const out: number[] = [];
-      for (let i = 0; i < n; i++) { const { over, ip } = mk(i); out.push((await login(over, ip)).status); }
-      return out;
-    });
+describe('限流（IP × 帳號：錯 10 次鎖 10 分鐘、再錯 10 次鎖 30 分鐘；另有整體 IP 上限）', () => {
+  const MIN = 60_000;
+  const wrong = { password: 'wrong' };
+  const LOCK = { code: 'LOGIN_RATE_LIMITED', message: '登入嘗試過多，請稍後再試' };
+  const pairBucket = (ip: string) => d1.raw.prepare('SELECT bucket_key, count, lock_level FROM rate_limit_buckets WHERE bucket_key LIKE ?').get(`login:${ip}:%`) as { bucket_key: string; count: number; lock_level: number } | undefined;
+  afterEach(() => { vi.useRealTimers(); });
+  const clock = () => vi.useFakeTimers({ toFake: ['Date'] });
+  const advance = (ms: number) => vi.setSystemTime(Date.now() + ms);
 
-  it('同一 email 的嘗試上限是 5 次：前 5 次 401，第 6 次起 429（連密碼正確也被擋）', async () => {
-    const statuses = await failFor(5, (i) => ({ over: { password: 'wrong' }, ip: `9.9.9.${i}` }));
-    expect(statuses).toEqual([401, 401, 401, 401, 401]);
+  async function seq(n: number, mk: (i: number) => { over?: Record<string, unknown>; ip: string }): Promise<number[]> {
+    const out: number[] = [];
+    for (let i = 0; i < n; i++) { const { over, ip } = mk(i); out.push((await login(over ?? {}, ip)).status); }
+    return out;
+  }
+  const fail = (n: number, ip = '9.9.9.9') => seq(n, () => ({ over: wrong, ip }));
+  const retryAfter = async (res: Response) => Number(res.headers.get('retry-after'));
+
+  it('錯 10 次後鎖 10 分鐘：第 11 次起 429（連密碼正確也被擋），Retry-After 約 600 秒', async () => {
+    clock();
+    expect((await fail(10)).every((s) => s === 401)).toBe(true);
     const locked = await login({}, '9.9.9.9');
     expect(locked.status).toBe(429);
-    expect(locked.headers.get('retry-after')).toMatch(/^\d+$/);
-    expect(((await locked.json()) as Err).error.code).toBe('LOGIN_RATE_LIMITED');
+    expect(await retryAfter(locked)).toBeGreaterThan(590);
+    expect(await retryAfter(locked)).toBeLessThanOrEqual(600);
+    expect(((await locked.json()) as Err).error).toEqual(LOCK);
   });
 
-  it('併發猜密碼也不能超過上限：同時 10 個請求，恰好 5 個進到密碼比對，其餘 429', async () => {
-    const results = await Promise.all(Array.from({ length: 10 }, (_, i) => login({ password: `guess-${i}` }, `5.5.5.${i}`)));
-    const statuses = results.map((r) => r.status).sort();
-    expect(statuses).toEqual([401, 401, 401, 401, 401, 429, 429, 429, 429, 429]);
-    expect(verifyMock).toHaveBeenCalledTimes(5); // 被擋的請求連雜湊都不做
+  it('10 分鐘過後解鎖；再錯 10 次鎖 30 分鐘', async () => {
+    clock();
+    await fail(10); await login({}, '9.9.9.9');
+    advance(10 * MIN - 5_000);
+    expect((await login({}, '9.9.9.9')).status).toBe(429);        // 還差幾秒，仍鎖著
+    advance(6_000);
+    expect((await fail(10)).every((s) => s === 401)).toBe(true);   // 解鎖後重新給 10 次
+    const locked = await login({}, '9.9.9.9');
+    expect(locked.status).toBe(429);
+    expect(await retryAfter(locked)).toBeGreaterThan(1790);
+    expect(await retryAfter(locked)).toBeLessThanOrEqual(1800);
   });
 
-  it('不存在的 email 一樣會鎖（行為相同，不能用鎖定與否判斷帳號存在）', async () => {
-    await failFor(5, (i) => ({ over: { email: 'ghost@example.com', password: 'x' }, ip: `8.8.8.${i}` }));
-    expect((await login({ email: 'ghost@example.com', password: 'x' }, '8.8.8.9')).status).toBe(429);
+  it('第 3 次起維持每次鎖 30 分鐘（繼續錯 10 次就再鎖 30 分鐘）', async () => {
+    clock();
+    await fail(10); await login({}, '9.9.9.9'); advance(10 * MIN + 1000);
+    await fail(10); await login({}, '9.9.9.9'); advance(30 * MIN + 1000);
+    expect((await fail(10)).every((s) => s === 401)).toBe(true);
+    const third = await login({}, '9.9.9.9');
+    expect(third.status).toBe(429);
+    expect(await retryAfter(third)).toBeGreaterThan(1790);
   });
 
-  it('同一 IP 累積失敗 20 次後，連換 email 也被擋；訊息與 email 鎖定相同', async () => {
-    const statuses = await failFor(20, (i) => ({ over: { email: `u${i}@example.com`, password: 'x' }, ip: '7.7.7.7' }));
-    expect(statuses.every((s) => s === 401)).toBe(true);
-    await login({ email: 'u20@example.com', password: 'x' }, '7.7.7.7'); // 第 21 次失敗觸發鎖定
+  it('鎖定期間的嘗試不算進下一輪的 10 次', async () => {
+    clock();
+    await fail(10);
+    await seq(25, () => ({ over: wrong, ip: '9.9.9.9' })); // 被鎖時狂打
+    advance(10 * MIN + 1000);
+    expect((await fail(10)).every((s) => s === 401)).toBe(true);
+    expect((await login({}, '9.9.9.9')).status).toBe(429);
+  });
+
+  it('被「IP × 帳號」擋下的嘗試不會灌高整體 IP 的計數', async () => {
+    clock();
+    await fail(10);
+    await seq(25, () => ({ over: wrong, ip: '9.9.9.9' })); // 鎖定期間狂打
+    expect(bucket('login:9.9.9.9')!.count).toBe(10);        // 只有真的進到驗證的 10 次
+  });
+
+  it('成功登入把該組合整個清零（含鎖定階段）：之後又是 10 次 → 10 分鐘', async () => {
+    clock();
+    await fail(10); await login({}, '9.9.9.9'); advance(10 * MIN + 1000);   // 已進入第二階段
+    await fail(9);
+    expect((await login({}, '9.9.9.9')).status).toBe(200);
+    expect(pairBucket('9.9.9.9')).toBeUndefined();
+    await fail(10);
+    const locked = await login({}, '9.9.9.9');
+    expect(locked.status).toBe(429);
+    expect(await retryAfter(locked)).toBeLessThanOrEqual(600);             // 回到 10 分鐘，不是 30
+  });
+
+  it('24 小時沒有新的失敗，階段歸零（又是 10 次 → 10 分鐘）', async () => {
+    clock();
+    await fail(10); await login({}, '9.9.9.9'); advance(10 * MIN + 1000);
+    await fail(3);
+    advance(25 * 60 * MIN);
+    await fail(10);
+    const locked = await login({}, '9.9.9.9');
+    expect(await retryAfter(locked)).toBeLessThanOrEqual(600);
+  });
+
+  it('只鎖「這個 IP 對這個帳號」：同 IP 打別的帳號、別的 IP 打同帳號都不受影響', async () => {
+    addUser('u9', 'bob@example.com', HASH);
+    await fail(11, '8.8.8.8');
+    expect((await login({}, '8.8.8.8')).status).toBe(429);
+    expect((await login({ email: 'bob@example.com' }, '8.8.8.8')).status).toBe(200);
+    expect((await login({}, '1.2.3.4')).status).toBe(200);
+  });
+
+  it('別人從很多不同 IP 各打一次，不會把該帳號鎖住', async () => {
+    expect((await seq(30, (i) => ({ over: wrong, ip: `10.0.0.${i}` }))).every((s) => s === 401)).toBe(true);
+    expect((await login({}, '10.9.9.9')).status).toBe(200);
+  });
+
+  it('併發也不能超過上限：同一 IP 對同一帳號同時 15 個請求，恰好 10 個進到密碼比對，其餘 429', async () => {
+    const results = await Promise.all(Array.from({ length: 15 }, (_, i) => login({ password: `guess-${i}` }, '5.5.5.5')));
+    const statuses = results.map((r) => r.status);
+    expect(statuses.filter((s) => s === 401)).toHaveLength(10);
+    expect(statuses.filter((s) => s === 429)).toHaveLength(5);
+    expect(verifyMock).toHaveBeenCalledTimes(10);
+  });
+
+  it('整體 IP 上限：同一 IP 累積 50 次失敗（即使每次換帳號）後，再換新帳號也被擋；訊息相同', async () => {
+    expect((await seq(50, (i) => ({ over: { email: `u${i}@example.com`, password: 'x' }, ip: '7.7.7.7' }))).every((s) => s === 401)).toBe(true);
     const byIp = await login({ email: 'fresh@example.com' }, '7.7.7.7');
     expect(byIp.status).toBe(429);
-    await failFor(5, (i) => ({ over: { password: 'wrong' }, ip: `6.6.6.${i}` }));
-    const byEmail = await login({}, '6.6.6.9');
-    expect(await byIp.json()).toEqual(await byEmail.json());
+    expect(((await byIp.json()) as Err).error).toEqual(LOCK);
   });
 
-  it('穿插成功登入不能清掉 IP 的失敗計數（否則攻擊者用自己的帳號就能無限試別人的）', async () => {
-    for (let i = 0; i < 21; i++) {
-      expect((await login({ email: `v${i}@example.com`, password: 'x' }, '4.4.4.4')).status).toBe(401);
-      if (i % 5 === 4) expect((await login({}, '4.4.4.4')).status).toBe(200); // 自己的帳號成功登入
-    }
-    expect((await login({ email: 'next@example.com', password: 'x' }, '4.4.4.4')).status).toBe(429);
+  it('不存在的帳號一樣會鎖，階段也相同（不能用鎖定行為判斷帳號存在）', async () => {
+    clock();
+    await seq(10, () => ({ over: { email: 'ghost@example.com', password: 'x' }, ip: '6.6.6.6' }));
+    const locked = await login({ email: 'ghost@example.com', password: 'x' }, '6.6.6.6');
+    expect(locked.status).toBe(429);
+    expect(await retryAfter(locked)).toBeLessThanOrEqual(600);
   });
 
-  it('成功登入只清掉該 email 的計數，不清 IP 的', async () => {
-    for (let i = 0; i < 3; i++) await login({ password: 'wrong' });
-    expect((await login()).status).toBe(200);
-    expect(bucket('login:alice@example.com')).toBeUndefined();
+  it('成功登入會退還整體 IP 的保留嘗試：計數只等於淨失敗，正常使用者連續登入不會被鎖', async () => {
+    for (let i = 0; i < 3; i++) await login(wrong);
+    expect((await seq(30, () => ({ ip: '1.1.1.1' }))).every((s) => s === 200)).toBe(true);
     expect(bucket('login:1.1.1.1')!.count).toBe(3);
   });
 
-  it('被鎖的 email 在鎖定期間，其他 email 不受影響', async () => {
-    await failFor(6, (i) => ({ over: { password: 'wrong' }, ip: `3.3.3.${i}` }));
-    addUser('u9', 'bob@example.com', HASH);
-    expect((await login({ email: 'bob@example.com' }, '3.3.3.200')).status).toBe(200);
+  it('穿插成功登入不能抵銷整體 IP 的失敗（否則攻擊者用自己的帳號就能無限試別人的）', async () => {
+    for (let i = 0; i < 50; i++) {
+      expect((await login({ email: `v${i}@example.com`, password: 'x' }, '4.4.4.4')).status).toBe(401);
+      if (i % 10 === 5) expect((await login({}, '4.4.4.4')).status).toBe(200); // 上限之前穿插自己的成功登入
+    }
+    // 淨失敗已達 50：若成功登入能清零，這裡就不會被擋
+    expect((await login({ email: 'next@example.com', password: 'x' }, '4.4.4.4')).status).toBe(429);
+  });
+
+  it('各種失敗（停權、無密碼雜湊、不存在）都計入', async () => {
+    addUser('u3', 'g@example.com', null);
+    addUser('u2', 'sus@example.com', HASH, 'suspended');
+    for (const email of ['ghost@example.com', 'g@example.com', 'sus@example.com']) await login({ email }, '2.2.2.2');
+    expect(bucket('login:2.2.2.2')!.count).toBe(3);
+  });
+
+  it('計數的 key 不含明文 email（資料表裡不留個資）', async () => {
+    await login(wrong); await login({ email: 'ghost@example.com', password: 'x' });
+    const keys = (d1.raw.prepare('SELECT bucket_key FROM rate_limit_buckets').all() as { bucket_key: string }[]).map((r) => r.bucket_key);
+    expect(keys.length).toBeGreaterThanOrEqual(3);
+    expect(keys.every((k) => k.startsWith('login:') && !k.includes('@') && !k.includes('example'))).toBe(true);
   });
 });
 

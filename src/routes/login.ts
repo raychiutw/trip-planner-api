@@ -6,9 +6,10 @@
  * - 只有 client_apps.first_party=1 的 public client 可用；其他一律同一個 400，而且在驗密碼之前就擋掉
  *   （非第一方 client 不能把這個端點當密碼比對的 oracle）。
  * - 帳號不存在、密碼錯、停權、沒有密碼雜湊：全部同一個 401 LOGIN_INVALID，且一律做一次雜湊運算（防 timing）。
- * - per-email：每 15 分鐘 5 次，驗證前先原子地保留一次嘗試（併發猜密碼也不能超過），成功才清零；
- *   per-IP：只計失敗、成功不清零，門檻 20 次（共用 NAT 不被誤鎖）。兩種鎖定回應文字相同；不存在的帳號一樣會鎖。
- *   已知取捨（舊入口就有）：攻擊者可故意打錯受害者的密碼把該帳號鎖 30 分鐘。
+ * - 限流以「IP × 帳號」為單位（錯 10 次鎖 10 分鐘，鎖完再錯 10 次鎖 30 分鐘，之後每輪 30 分鐘）+ 整體 IP 上限（50 次、30 分鐘）：
+ *   驗證前先原子地保留一次嘗試；成功時 IP × 帳號清零、整體 IP 退還這一次（計數＝淨失敗）。攻擊者只會鎖到自己的 IP 對該帳號，無法把受害者鎖在外面；
+ *   兩種鎖定回應文字相同；不存在的帳號一樣會鎖。已知殘餘：分散式（大量不同 IP）慢速猜單一帳號不會被擋，
+ *   需靠密碼強度與 audit 告警。
  * - 強制 PKCE（S256）；code 60 秒有效、沒有 redirect_uri；可選 dpop_jkt 把 code 綁定到金鑰。
  * - 密碼只進雜湊函式：不 log、不寫 audit、不回傳。
  * 錯誤形狀沿用舊入口的巢狀 LOGIN_*（web 登入頁已會處理這些 code）。
@@ -19,10 +20,11 @@ import { AppError, buildRateLimitResponse, errorResponse } from '../errors';
 import { recordAuthEvent } from '../lib/auth-audit';
 import { generateOpaqueToken } from '../lib/crypto';
 import { normalizeEmail } from '../lib/email-utils';
+import { sha256Base64Url } from '../lib/crypto';
 import { D1Adapter } from '../lib/oauth-d1-adapter';
 import { parseAllowedScopes, readJsonObject } from '../lib/oauth-request';
 import { verifyPassword } from '../lib/password';
-import { bumpRateLimit, checkRateLimit, clientIp, RATE_LIMITS, resetRateLimit } from '../lib/rate-limit';
+import { bumpRateLimit, bumpTieredLock, clientIp, RATE_LIMITS, refundRateLimit, resetRateLimit } from '../lib/rate-limit';
 
 const MAX_PASSWORD_LENGTH = 1024;
 const LOGIN_CODE_TTL_SEC = 60;
@@ -56,11 +58,6 @@ export function registerLoginRoute(app: Hono<AppEnv>): void {
     if (dpopJkt !== undefined && (typeof dpopJkt !== 'string' || !B64URL_43.test(dpopJkt))) return invalidInput();
     if (scope !== undefined && typeof scope !== 'string') return invalidInput();
 
-    // 2. 已被鎖定的 IP 直接擋（只讀，不寫）
-    const ipKey = `login:${clientIp(request)}`;
-    const ipCheck = await checkRateLimit(DB, ipKey, RATE_LIMITS.LOGIN_IP);
-    if (!ipCheck.ok) return rateLimited(ipCheck.retryAfter ?? 60);
-
     // 3. client 必須是啟用中的第一方 public client；其他一律同一個 400，不洩漏原因，也不計失敗次數
     const client = await DB.prepare('SELECT client_type, status, first_party, allowed_scopes FROM client_apps WHERE client_id = ?')
       .bind(clientId).first<ClientRow>();
@@ -70,11 +67,21 @@ export function registerLoginRoute(app: Hono<AppEnv>): void {
     const requested = scope === undefined ? DEFAULT_SCOPES.filter((s) => allowed.includes(s)) : scope.split(/\s+/).filter(Boolean);
     if (requested.length === 0 || requested.some((s) => !allowed.includes(s))) return invalidInput();
 
-    // 4. per-email：先「保留」一次嘗試再驗證（bump 本身是單一語句的原子遞增＋鎖定判斷）。
-    //    若改成先查、驗完才加，併發的請求會在雜湊期間全部通過檢查，實際可猜次數會超過上限。
-    const emailKey = `login:${email}`;
-    const reserved = await bumpRateLimit(DB, emailKey, RATE_LIMITS.LOGIN);
-    if (!reserved.ok) return rateLimited(reserved.retryAfter ?? 60);
+    // 4. 限流：以「IP × 帳號」為單位、階梯式鎖定（錯 10 次鎖 10 分鐘，鎖完再錯 10 次鎖 30 分鐘）；
+    //    攻擊者只會鎖到自己的 IP 對該帳號，本人從別的 IP 不受影響。
+    //    另有整體 IP 上限（擋單一 IP 對大量帳號的撞庫）。
+    //    兩者都在驗證前先「保留」一次嘗試（bump 是單一語句的原子遞增＋鎖定判斷）：併發猜密碼不會超過上限；
+    //    整體 IP 的保留在成功時退還（計數＝淨失敗，穿插成功登入抵銷不了別人的失敗）；
+    //    IP × 帳號在成功時清零（只影響自己這組，清不到別人的帳號）。
+    //    key 用 email 的雜湊，資料表不留明文 email。
+    const ip = clientIp(request);
+    const ipKey = `login:${ip}`;
+    const pairKey = `login:${ip}:${await sha256Base64Url(email)}`;
+    // 先保留「IP × 帳號」；被擋的嘗試不會灌高整體 IP 的計數
+    const pairReserved = await bumpTieredLock(DB, pairKey, RATE_LIMITS.LOGIN_PAIR);
+    if (!pairReserved.ok) return rateLimited(pairReserved.retryAfter ?? 60);
+    const ipReserved = await bumpRateLimit(DB, ipKey, RATE_LIMITS.LOGIN_IP);
+    if (!ipReserved.ok) return rateLimited(ipReserved.retryAfter ?? 60);
 
     // 5. 驗證：一律做一次雜湊運算（真的或假的），再統一判斷
     const identity = await DB.prepare(
@@ -90,7 +97,6 @@ export function registerLoginRoute(app: Hono<AppEnv>): void {
       : identity.status !== 'active' ? 'account_suspended'
       : null;
     if (failureReason) {
-      await bumpRateLimit(DB, ipKey, RATE_LIMITS.LOGIN_IP); // email 的次數已在驗證前保留
       await recordAuthEvent(DB, request, {
         eventType: 'login', outcome: 'failure', userId: identity?.user_id ?? null, clientId, failureReason, metadata: { email },
       }, c.env);
@@ -98,8 +104,9 @@ export function registerLoginRoute(app: Hono<AppEnv>): void {
     }
 
     // 6. 成功：清計數、更新 last_used_at、發 code
-    // 只清 email 的計數；IP 的失敗計數不清（成功不能抵銷別人的失敗）
-    await resetRateLimit(DB, emailKey);
+    // 退還保留的嘗試（只退自己這一次，不是清零）
+    await refundRateLimit(DB, ipKey);
+    await resetRateLimit(DB, pairKey); // 本人登入成功：這個 IP × 帳號整組清零（含鎖定階段）
     try {
       await DB.prepare("UPDATE auth_identities SET last_used_at = ? WHERE provider = 'local' AND provider_user_id = ?")
         .bind(new Date().toISOString(), email).run();

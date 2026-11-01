@@ -99,8 +99,9 @@ export function registerTokenRoute(app: Hono<AppEnv>): void {
     const clientId = basic?.id ?? body.client_id;
     const clientSecret = basic?.secret ?? body.client_secret;
     if (!clientId) return oauthError('invalid_client', 'Missing client_id');
-    // mobile client 的環境閘門（自舊入口移植）：client 與環境相符；authorization_code 的 redirect_uri 必須是該環境的精確 callback
-    if (!mobileClientAllowed(c.env, request, clientId, grantType === 'authorization_code' ? (body.redirect_uri ?? null) : undefined)) {
+    // mobile client 的環境閘門（自舊入口移植）：client 必須與環境相符；請求若帶 redirect_uri，必須是該環境的精確 callback。
+    // 第一方密碼登入發的 code 沒有 redirect_uri、換 token 也不帶：沒帶就不比對（code 自己的 redirect 綁定由下方 authorization_code 流程驗）。
+    if (!mobileClientAllowed(c.env, request, clientId, grantType === 'authorization_code' ? (body.redirect_uri ?? undefined) : undefined)) {
       return oauthError('invalid_client', MOBILE_GATE_MESSAGE);
     }
 

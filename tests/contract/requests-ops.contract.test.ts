@@ -10,12 +10,13 @@ import { createApi, type Api } from '../baseline/http';
 import { serviceToken } from '../baseline/service-token';
 import { _resetGcpTokenCacheForTest } from '../../src/lib/gcp-monitoring';
 import type { Env } from '../../src/env';
+import type { z } from '@hono/zod-openapi';
 import { ApiError } from '../../src/schemas/common';
-import { expectContract } from './support';
+import { contractIssues, expectContract } from './support';
 import {
   Admin_BackfillStatus, Admin_CacheCleanup, Admin_MapsLock, Admin_MapsSettings, Admin_MapsUnlock,
-  Admin_PoisDueRefresh, Admin_PoisPendingPlaceId, Admin_QuotaEstimate,
-  Reports_Ok, Requests_ListResponse, Requests_Row, Requests_RowWithName,
+  Admin_LimitQuery, Admin_MapsLockBody, Admin_PoisDueRefresh, Admin_PoisPendingPlaceId, Admin_QuotaEstimate,
+  Reports_Body, Reports_Ok, Requests_CreateBody, Requests_ListQuery, Requests_PatchBody, Requests_ListResponse, Requests_Row, Requests_RowWithName,
 } from '../../src/schemas/requests-ops';
 
 const TRIP = 'ct-reqops-trip';
@@ -84,6 +85,10 @@ beforeEach(() => {
   stubGcp();
 });
 
+/** 文件的 body／query schema 不在執行期驗證；這裡用同一份 schema 驗證「測試實際送出的內容」，回傳原值。 */
+const sent = <T>(schema: z.ZodTypeAny, value: T): T => { expectContract(schema, value); return value; };
+const invalid = (schema: z.ZodTypeAny, value: unknown) => expect(contractIssues(schema, value).length, '文件的 schema 應判定不合法').toBeGreaterThan(0);
+
 const errorOf = async (res: Response, status: number) => {
   expect(res.status).toBe(status);
   expectContract(ApiError, await res.json());
@@ -93,7 +98,7 @@ describe('requests', () => {
   let requestId: number;
 
   it('POST /api/requests 201：回傳 trip_requests 資料列', async () => {
-    const res = await api.request('POST', '/api/requests', { as: OWNER, json: { tripId: TRIP, message: '契約測試請求' } });
+    const res = await api.request('POST', '/api/requests', { as: OWNER, json: sent(Requests_CreateBody, { tripId: TRIP, message: '契約測試請求', mode: 'trip-edit' }) });
     expect(res.status).toBe(201);
     const body = await res.json() as { id: number };
     expectContract(Requests_Row, body);
@@ -108,8 +113,20 @@ describe('requests', () => {
     expect(body.id).toBe(requestId);
   });
 
+  it('POST /api/requests 舊欄位 title + body 合併成 message', async () => {
+    const res = await api.request('POST', '/api/requests', { as: OWNER, json: sent(Requests_CreateBody, { tripId: TRIP, title: '標題', body: '內文' }) });
+    expect(res.status).toBe(201);
+    const row = await res.json() as { message: string };
+    expectContract(Requests_Row, row);
+    expect(row.message).toBe('標題\n內文');
+  });
+
   it('POST /api/requests 400／401／403', async () => {
+    // handler 拒絕缺 message，文件的 body schema 也判定不合法（對照組）
+    invalid(Requests_CreateBody, { tripId: TRIP, message: 123 });
+    invalid(Requests_CreateBody, { message: 'x' });
     await errorOf(await api.request('POST', '/api/requests', { as: OWNER, json: { tripId: TRIP } }), 400);
+    await errorOf(await api.request('POST', '/api/requests', { as: OWNER, json: { message: 'x' } }), 400);
     await errorOf(await api.request('POST', '/api/requests', { headers: { Origin: 'https://trip-planner-dby.pages.dev' }, json: { tripId: TRIP, message: 'x' } }), 401);
     await errorOf(await api.request('POST', '/api/requests', { as: STRANGER, json: { tripId: TRIP, message: 'x' } }), 403);
   });
@@ -131,6 +148,24 @@ describe('requests', () => {
     expectContract(Requests_ListResponse, body);
   });
 
+  it('GET /api/requests 200：帶齊 query 參數（含 cursor）', async () => {
+    const query = sent(Requests_ListQuery, { tripId: TRIP, status: 'open', limit: '5', sort: 'desc', before: '2999-01-01 00:00:00', beforeId: '999999', after: '2000-01-01 00:00:00', afterId: '0' });
+    const res = await api.get(`/api/requests?${new URLSearchParams(query as Record<string, string>)}`, { as: OWNER });
+    expect(res.status).toBe(200);
+    expectContract(Requests_ListResponse, await res.json());
+  });
+
+  it('GET /api/requests 回應欄位有值：actionsTaken、reply、submittedByDisplayName', async () => {
+    await db.prepare("UPDATE trip_requests SET actions_taken = '已加入景點', reply = '好的', updated_at = datetime('now') WHERE id = ?").bind(requestId).run();
+    const list = await (await api.get(`/api/requests?tripId=${TRIP}&limit=50`, { as: OWNER })).json() as { items: Array<Record<string, unknown>> };
+    expectContract(Requests_ListResponse, list);
+    const row = list.items.find((r) => r.id === requestId)!;
+    expect(row).toMatchObject({ actionsTaken: '已加入景點', reply: '好的', submittedByDisplayName: expect.any(String) });
+    const one = await (await api.get(`/api/requests/${requestId}`, { as: OWNER })).json() as Record<string, unknown>;
+    expectContract(Requests_RowWithName, one);
+    expect(one.actionsTaken).toBe('已加入景點');
+  });
+
   it('GET /api/requests 400／401／403', async () => {
     await errorOf(await api.get('/api/requests', { as: OWNER }), 400);
     await errorOf(await api.get(`/api/requests?tripId=${TRIP}`), 401);
@@ -147,13 +182,13 @@ describe('requests', () => {
   });
 
   it('PATCH /api/requests/:id 200：companion service token 成功（status／reply／processed_by）', async () => {
-    const res = await api.request('PATCH', `/api/requests/${requestId}`, { bearer: companion, json: { status: 'processing', reply: '處理中', processed_by: 'job' } });
+    const res = await api.request('PATCH', `/api/requests/${requestId}`, { bearer: companion, json: sent(Requests_PatchBody, { status: 'processing', reply: '處理中', processed_by: 'job' }) });
     expect(res.status).toBe(200);
     expectContract(Requests_Row, await res.json());
   });
 
   it('PATCH /api/requests/:id 200：有寫權的 owner 也可；終結帶 terminalReason', async () => {
-    const res = await api.request('PATCH', `/api/requests/${requestId}`, { as: OWNER, json: { status: 'failed', terminalReason: 'cancelled' } });
+    const res = await api.request('PATCH', `/api/requests/${requestId}`, { as: OWNER, json: sent(Requests_PatchBody, { status: 'failed', terminalReason: 'cancelled' }) });
     expect(res.status).toBe(200);
     const body = await res.json() as { status: string; terminalReason: string };
     expectContract(Requests_Row, body);
@@ -161,7 +196,14 @@ describe('requests', () => {
   });
 
   it('PATCH /api/requests/:id 400／401／403／404', async () => {
+    // handler 拒絕的值，文件的 body schema 同樣判定不合法
+    invalid(Requests_PatchBody, { status: 'bogus' });
+    invalid(Requests_PatchBody, { processed_by: 'human' });
+    invalid(Requests_PatchBody, { terminalReason: 'whatever' });
+    invalid(Requests_PatchBody, { reply: 123 });
     await errorOf(await api.request('PATCH', `/api/requests/${requestId}`, { bearer: companion, json: { status: 'bogus' } }), 400);
+    await errorOf(await api.request('PATCH', `/api/requests/${requestId}`, { bearer: companion, json: { processed_by: 'human' } }), 400);
+    await errorOf(await api.request('PATCH', `/api/requests/${requestId}`, { bearer: companion, json: { terminalReason: 'whatever' } }), 400);
     await errorOf(await api.request('PATCH', `/api/requests/${requestId}`, { headers: { Origin: 'https://trip-planner-dby.pages.dev' }, json: { reply: 'x' } }), 401);
     // gate：沒有 companion scope 又沒有該 trip 寫權 → 403（陌生 user、只有 ops:maps 的 service token）
     await errorOf(await api.request('PATCH', `/api/requests/${requestId}`, { as: STRANGER, json: { reply: 'x' } }), 403);
@@ -175,18 +217,21 @@ describe('reports（公開）', () => {
     api.request('POST', '/api/reports', { json, headers: { Origin: 'https://trip-planner-dby.pages.dev', 'CF-Connecting-IP': ip } });
 
   it('201：寫入回報', async () => {
-    const res = await post({ tripId: TRIP, url: 'https://x/ct', errorCode: 'SYS_INTERNAL', errorMessage: 'm', userAgent: 'ua', context: 'c' });
+    const res = await post(sent(Reports_Body, { tripId: TRIP, url: 'https://x/ct', errorCode: 'SYS_INTERNAL', errorMessage: 'm', userAgent: 'ua', context: 'c' }));
     expect(res.status).toBe(201);
     expectContract(Reports_Ok, await res.json());
   });
 
   it('200：蜜罐欄位假裝成功', async () => {
-    const res = await post({ tripId: TRIP, website: 'spam' });
-    expect(res.status).toBe(200);
-    expectContract(Reports_Ok, await res.json());
+    for (const honeypot of [{ website: 'spam' }, { email_confirm: 'spam@x.com' }]) {
+      const res = await post(sent(Reports_Body, { tripId: TRIP, ...honeypot }));
+      expect(res.status).toBe(200);
+      expectContract(Reports_Ok, await res.json());
+    }
   });
 
   it('400／429（重複與 IP 鎖定兩種）', async () => {
+    invalid(Reports_Body, { url: 'x' }); // 缺 tripId：handler 拒絕，文件的 schema 也判定不合法
     await errorOf(await post({ url: 'x' }), 400);
     await errorOf(await post({ tripId: TRIP, url: 'https://x/ct' }), 429); // 30 秒內同 trip + url
     await db.prepare('INSERT OR REPLACE INTO rate_limit_buckets (bucket_key, count, window_start, locked_until) VALUES (?, ?, ?, ?)')
@@ -197,20 +242,24 @@ describe('reports（公開）', () => {
 
 describe('admin（需對應 ops scope 的 service token）', () => {
   it('GET /api/admin/backfill-status（ops:poi）200／401／403', async () => {
-    await db.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('google_maps_migration_applied_at', '2026-01-01T00:00:00Z')").run();
+    await db.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('google_maps_migration_applied_at', '2026-01-01T00:00:00Z'), ('google_maps_last_backfill_run_at', '2026-01-02T00:00:00Z')").run();
     const res = await api.get('/api/admin/backfill-status', { bearer: opsPoi });
     expect(res.status).toBe(200);
-    expectContract(Admin_BackfillStatus, await res.json());
+    const body = await res.json() as Record<string, unknown>;
+    expectContract(Admin_BackfillStatus, body);
+    expect(body).toMatchObject({ migration_applied_at: '2026-01-01T00:00:00Z', last_backfill_run_at: '2026-01-02T00:00:00Z' });
     await errorOf(await api.get('/api/admin/backfill-status'), 401);
     await errorOf(await api.get('/api/admin/backfill-status', { bearer: opsMaps }), 403);
   });
 
   it('GET /api/admin/pois-due-refresh（ops:poi）200／403', async () => {
     await db.prepare("INSERT INTO pois (type, name, place_id, status) VALUES ('restaurant', 'due', 'pid-1', 'active')").run();
-    const res = await api.get('/api/admin/pois-due-refresh?limit=5', { bearer: opsPoi });
+    await db.prepare("INSERT INTO pois (type, name, place_id, status, last_refreshed_at) VALUES ('restaurant', 'stale', 'pid-2', 'active', '2020-01-01 00:00:00')").run();
+    const res = await api.get(`/api/admin/pois-due-refresh?${new URLSearchParams(sent(Admin_LimitQuery, { limit: '5' }) as Record<string, string>)}`, { bearer: opsPoi });
     expect(res.status).toBe(200);
     const body = await res.json() as { rows: unknown[] };
-    expect(body.rows.length).toBeGreaterThan(0);
+    expect(body.rows.length).toBe(2);
+    expect((body.rows as Array<{ last_refreshed_at: string | null }>).some((r) => r.last_refreshed_at === '2020-01-01 00:00:00')).toBe(true);
     expectContract(Admin_PoisDueRefresh, body);
     await errorOf(await api.get('/api/admin/pois-due-refresh', { bearer: opsCache }), 403);
     await errorOf(await api.get('/api/admin/pois-due-refresh'), 401);
@@ -218,10 +267,11 @@ describe('admin（需對應 ops scope 的 service token）', () => {
 
   it('GET /api/admin/pois-pending-place-id（ops:poi）200／403', async () => {
     await db.prepare("INSERT INTO pois (type, name) VALUES ('restaurant', 'pending')").run();
-    const res = await api.get('/api/admin/pois-pending-place-id?limit=5', { bearer: opsPoi });
+    await db.prepare("INSERT INTO pois (type, name, address) VALUES ('restaurant', 'pending-addr', '那霸市')").run();
+    const res = await api.get(`/api/admin/pois-pending-place-id?${new URLSearchParams(sent(Admin_LimitQuery, { limit: '5' }) as Record<string, string>)}`, { bearer: opsPoi });
     expect(res.status).toBe(200);
     const body = await res.json() as { rows: unknown[] };
-    expect(body.rows.length).toBeGreaterThan(0);
+    expect((body.rows as Array<{ address: string | null }>).some((r) => r.address === '那霸市')).toBe(true);
     expectContract(Admin_PoisPendingPlaceId, body);
     await errorOf(await api.get('/api/admin/pois-pending-place-id', { bearer: opsMaps }), 403);
     await errorOf(await api.get('/api/admin/pois-pending-place-id'), 401);
@@ -236,19 +286,21 @@ describe('admin（需對應 ops scope 的 service token）', () => {
   });
 
   it('maps-lock／maps-settings／maps-unlock（ops:maps）200／403', async () => {
-    const lock = await api.request('POST', '/api/admin/maps-lock', { bearer: opsMaps, json: { reason: '契約測試' } });
+    const lock = await api.request('POST', '/api/admin/maps-lock', { bearer: opsMaps, json: sent(Admin_MapsLockBody, { reason: '契約測試' }) });
     expect(lock.status).toBe(200);
     expectContract(Admin_MapsLock, await lock.json());
 
     const locked = await api.get('/api/admin/maps-settings', { bearer: opsMaps });
     expect(locked.status).toBe(200);
     const lockedBody = await locked.json() as { is_locked: boolean };
-    expect(lockedBody.is_locked).toBe(true);
+    expect(lockedBody).toMatchObject({ is_locked: true, locked_reason: '契約測試', locked_at: expect.any(String) });
     expectContract(Admin_MapsSettings, lockedBody);
 
     const unlock = await api.request('POST', '/api/admin/maps-unlock', { bearer: opsMaps });
     expect(unlock.status).toBe(200);
-    expectContract(Admin_MapsUnlock, await unlock.json());
+    const unlockBody = await unlock.json() as { previous_reason: string };
+    expectContract(Admin_MapsUnlock, unlockBody);
+    expect(unlockBody.previous_reason).toBe('契約測試');
 
     await errorOf(await api.request('POST', '/api/admin/maps-lock', { bearer: opsPoi }), 403);
     await errorOf(await api.request('POST', '/api/admin/maps-unlock', { bearer: opsPoi }), 403);

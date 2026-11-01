@@ -128,8 +128,7 @@ describe('POST /api/oauth/downscope through real middleware', () => {
 });
 
 // 依賴其他組：GET /api/trips/:id 由 trips-core 組登記，此分支合併前路由不存在（404）。
-// 整合分支合併 trips-core 後請把 describe.skip 改回 describe（restrict_trip 的強制本身在 permissions，由該組與 mutation 驗證）。
-describe.skip('restrict_trip 跨 trip 強制（end-to-end through middleware）', () => {
+describe('restrict_trip 跨 trip 強制（end-to-end through middleware）', () => {
   it('restrict_trip=ds-trip-a 的 token 讀 ds-trip-b → 403（confused-deputy：連讀都擋）', async () => {
     const token = 'ds-restricted-to-a';
     await seedAccessToken({ token, userId: ownerUserId, restrictTrip: 'ds-trip-a' });

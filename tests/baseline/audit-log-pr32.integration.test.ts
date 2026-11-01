@@ -55,7 +55,7 @@ describe('PR32 — POST /api/trips/:id/days 補 audit_log', () => {
 
     const after = await fetchAuditRows(tripId, 'trip_days');
     expect(after.length).toBe(before.length + 1);
-    const last = after[after.length - 1];
+    const last = after[after.length - 1]!;
     expect(last.action).toBe('insert');
     expect(last.recordId).toBeGreaterThan(0);
     expect(last.diffJson).toContain('day_num');
@@ -84,7 +84,7 @@ describe('PR32 — POST /api/trips/:id/days/shift 補 audit_log', () => {
     // 最新一筆應是 shift（之前可能有 POST insert 留下的，這裡找 op:shift）
     const shifts = audits.filter((a) => a.diffJson.includes('"op":"shift"'));
     expect(shifts.length).toBeGreaterThanOrEqual(1);
-    const shiftAudit = shifts[shifts.length - 1];
+    const shiftAudit = shifts[shifts.length - 1]!;
     expect(shiftAudit.action).toBe('update');
     expect(shiftAudit.recordId).toBeNull();
     expect(shiftAudit.diffJson).toContain('"deltaDays":3');
@@ -111,10 +111,10 @@ describe('PR32 — source-grep regression: 4 endpoint 都 import logAudit', () =
     const { join } = await import('path');
     const ROOT = join(__dirname, '..', '..');
     const FILES = [
-      'functions/api/trips/[id]/days.ts',
-      'functions/api/trips/[id]/days/shift.ts',
-      'functions/api/trips/[id]/recompute-travel.ts',
-      'functions/api/pois/[id]/enrich.ts',
+      'src/routes/handlers/trips/@id/days.ts',
+      'src/routes/handlers/trips/@id/days/shift.ts',
+      'src/routes/handlers/trips/@id/recompute-travel.ts',
+      'src/routes/handlers/pois/@id/enrich.ts',
     ];
     for (const rel of FILES) {
       const src = readFileSync(join(ROOT, rel), 'utf8');

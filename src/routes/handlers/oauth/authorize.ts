@@ -33,7 +33,7 @@ export interface AuthRequestPayload {
 
 /** 網頁端 origin：WEB_ORIGIN 優先，缺省用 PUBLIC_ORIGIN；都沒有則 null。 */
 function webOrigin(env: Env): string | null {
-  const e = env as Env & { WEB_ORIGIN?: string };
+  const e = env as Env;
   const raw = e.WEB_ORIGIN || e.PUBLIC_ORIGIN;
   if (!raw) return null;
   try {

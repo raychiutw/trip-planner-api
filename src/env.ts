@@ -18,6 +18,8 @@ export interface Env {
   CF_ACCESS_POLICY_ID?: string;
   /** 取代 request.url.origin 組 email 連結／OIDC issuer（防 Host header 偽造）。 */
   PUBLIC_ORIGIN?: string;
+  /** web 的 origin：授權流程把使用者導向 `${WEB_ORIGIN}/oauth/authorize`；缺省用 PUBLIC_ORIGIN。 */
+  WEB_ORIGIN?: string;
   DEV_MOCK_EMAIL?: string;
   /** auth_audit_log／session 的 IP 雜湊用 HMAC key。 */
   OAUTH_SIGNING_PRIVATE_KEY?: string;

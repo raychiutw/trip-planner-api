@@ -575,17 +575,17 @@ describe('/api/permissions', () => {
     await expectApiError(await patch(id, invalid(S.Account_PermissionPatchBody, { role: 'owner' }), ownerBearer), 400, 'DATA_VALIDATION');
     await expectApiError(await patch(id, {}, ownerBearer), 400, 'DATA_VALIDATION');
     await expectApiError(await patch(id, { role: 'viewer' }), 401);
-    await expectApiError(await patch(id, { role: 'viewer' }, strangerBearer), 403, 'PERM_ADMIN_ONLY');
+    await expectApiError(await patch(id, { role: 'viewer' }, strangerBearer), 404, 'DATA_NOT_FOUND'); // 無管理權一律 404（不洩漏存在與否）
     await expectApiError(await patch(owner, { role: 'viewer' }, ownerBearer), 403, 'PERM_DENIED'); // owner 列不可改
     await expectApiError(await patch(999999, { role: 'viewer' }, ownerBearer), 404, 'DATA_NOT_FOUND');
   });
 
-  it('DELETE → 200 { ok }；403（owner 列／非 owner）；404；401', async () => {
+  it('DELETE → 200 { ok }；403（擁有者刪擁有者列）；404（含無管理權）；401', async () => {
     const id = await addMember('acct-del-m@test.com');
     const owner = await ownerPermId();
     const del = (pid: number | string, bearer?: string) => hit('/api/permissions/{id}', 'delete', `/api/permissions/${pid}`, { bearer });
     await expectApiError(await del(id), 401);
-    await expectApiError(await del(id, strangerBearer), 403, 'PERM_ADMIN_ONLY');
+    await expectApiError(await del(id, strangerBearer), 404, 'DATA_NOT_FOUND'); // 無管理權一律 404（不洩漏存在與否）
     await expectApiError(await del(owner, ownerBearer), 403, 'PERM_DENIED');
     await expectApiError(await del(999999, ownerBearer), 404, 'DATA_NOT_FOUND');
     const ok = await del(id, ownerBearer);

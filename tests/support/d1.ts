@@ -9,12 +9,14 @@ import * as path from 'node:path';
 
 type Row = Record<string, unknown>;
 
-export function createD1(): { db: D1Database; raw: DatabaseSync; close: () => void } {
+export function createD1(opts: { through?: number } = {}): { db: D1Database; raw: DatabaseSync; close: () => void; applyMigrationsAfter: (n: number) => void } {
   const raw = new DatabaseSync(':memory:');
   const dir = path.join(__dirname, '../../migrations');
-  for (const f of fs.readdirSync(dir).filter((x) => /^\d{4}_.*\.sql$/.test(x)).sort()) {
-    raw.exec(fs.readFileSync(path.join(dir, f), 'utf8'));
-  }
+  const files = fs.readdirSync(dir).filter((x) => /^\d{4}_.*\.sql$/.test(x)).sort();
+  const num = (f: string) => Number(f.slice(0, 4));
+  for (const f of files.filter((x) => opts.through === undefined || num(x) <= opts.through)) raw.exec(fs.readFileSync(path.join(dir, f), 'utf8'));
+  /** 接著套用編號大於 n 的 migration（測試「套用當下資料庫裡已有資料」的情境）。 */
+  const applyMigrationsAfter = (n: number) => { for (const f of files.filter((x) => num(x) > n)) raw.exec(fs.readFileSync(path.join(dir, f), 'utf8')); };
   const prepare = (sql: string) => {
     let params: unknown[] = [];
     const stmt = {
@@ -44,5 +46,5 @@ export function createD1(): { db: D1Database; raw: DatabaseSync; close: () => vo
       throw e;
     }
   };
-  return { db: { prepare, batch } as unknown as D1Database, raw, close: () => raw.close() };
+  return { db: { prepare, batch } as unknown as D1Database, raw, close: () => raw.close(), applyMigrationsAfter };
 }

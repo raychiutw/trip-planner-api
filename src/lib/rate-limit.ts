@@ -157,6 +157,9 @@ export function clientIp(request: Request): string {
 export const RATE_LIMITS = {
   // Anti brute-force login: 5 attempts / 15min window, 30min lockout
   LOGIN: { maxAttempts: 5, windowMs: 15 * 60 * 1000, lockoutMs: 30 * 60 * 1000 },
+  // 登入 per-IP：只計「失敗」且成功不清零（否則攻擊者穿插自己的成功登入就能無限試別人的帳號）。
+  // 門檻放寬到 20 次，讓共用 NAT 的正常使用者不會因為少數幾次打錯被一起鎖。
+  LOGIN_IP: { maxAttempts: 20, windowMs: 15 * 60 * 1000, lockoutMs: 30 * 60 * 1000 },
   // Signup spam protection: 10 attempts / 1h window, 1h lockout.
   // (Was 3/h per autoplan; bumped — too tight for dev self-testing + shared NAT IP)
   SIGNUP: { maxAttempts: 10, windowMs: 60 * 60 * 1000, lockoutMs: 60 * 60 * 1000 },

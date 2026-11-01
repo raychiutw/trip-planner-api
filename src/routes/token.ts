@@ -13,11 +13,10 @@ import { recordAuthEvent } from '../lib/auth-audit';
 import { generateOpaqueToken } from '../lib/crypto';
 import { readDpopHeader, verifyDpopProof } from '../lib/dpop';
 import { D1Adapter } from '../lib/oauth-d1-adapter';
+import { parseAllowedScopes, readBodyText } from '../lib/oauth-request';
 import { verifyPassword } from '../lib/password';
 import { bumpRateLimit, checkRateLimit, clientIp, RATE_LIMITS } from '../lib/rate-limit';
 import { ACCESS_TOKEN_TTL_SEC, exchangeAuthorizationCode, rotateRefreshToken } from '../lib/token-lifecycle';
-
-const MAX_BODY_BYTES = 16 * 1024;
 
 interface ClientAppRow {
   client_id: string;
@@ -38,8 +37,8 @@ function oauthError(error: string, description: string, status = 400): Response 
 
 async function parseBody(request: Request): Promise<Record<string, string> | null> {
   const ct = request.headers.get('content-type') ?? '';
-  const text = await request.text();
-  if (text.length > MAX_BODY_BYTES) return null;
+  const text = await readBodyText(request);
+  if (text === null) return null;
   try {
     if (ct.includes('application/x-www-form-urlencoded')) return Object.fromEntries(new URLSearchParams(text));
     if (ct.includes('application/json')) {
@@ -128,11 +127,7 @@ export function registerTokenRoute(app: Hono<AppEnv>): void {
       if (client.client_type !== 'confidential') {
         return oauthError('unauthorized_client', 'client_credentials grant requires a confidential client', 401);
       }
-      let allowed: string[] = [];
-      try {
-        const parsed: unknown = JSON.parse(client.allowed_scopes ?? '[]');
-        if (Array.isArray(parsed)) allowed = parsed.filter((s): s is string => typeof s === 'string');
-      } catch { /* 壞掉 → 空白名單（拒絕） */ }
+      const allowed = parseAllowedScopes(client.allowed_scopes);
       const requested = parseScopes(body.scope);
       const finalScopes = requested.length === 0 ? allowed : requested;
       const invalid = finalScopes.filter((s) => !allowed.includes(s));

@@ -195,31 +195,82 @@ describe('只有第一方 client 可以用', () => {
 });
 
 describe('限流', () => {
-  it('同一 email 連續失敗到上限後鎖定：下一次回 429（連密碼正確也被擋）', async () => {
-    // 上限 5 次：第 6 次失敗仍回 401，並觸發鎖定；之後才 429
-    for (let i = 0; i < 6; i++) expect((await login({ password: 'wrong' }, `9.9.9.${i}`)).status).toBe(401);
+  const failFor = (n: number, mk: (i: number) => { over: Record<string, unknown>; ip: string }) =>
+    Promise.all(Array.from({ length: n }, () => 0)).then(async () => {
+      const out: number[] = [];
+      for (let i = 0; i < n; i++) { const { over, ip } = mk(i); out.push((await login(over, ip)).status); }
+      return out;
+    });
+
+  it('同一 email 的嘗試上限是 5 次：前 5 次 401，第 6 次起 429（連密碼正確也被擋）', async () => {
+    const statuses = await failFor(5, (i) => ({ over: { password: 'wrong' }, ip: `9.9.9.${i}` }));
+    expect(statuses).toEqual([401, 401, 401, 401, 401]);
     const locked = await login({}, '9.9.9.9');
     expect(locked.status).toBe(429);
     expect(locked.headers.get('retry-after')).toMatch(/^\d+$/);
     expect(((await locked.json()) as Err).error.code).toBe('LOGIN_RATE_LIMITED');
   });
+
+  it('併發猜密碼也不能超過上限：同時 10 個請求，恰好 5 個進到密碼比對，其餘 429', async () => {
+    const results = await Promise.all(Array.from({ length: 10 }, (_, i) => login({ password: `guess-${i}` }, `5.5.5.${i}`)));
+    const statuses = results.map((r) => r.status).sort();
+    expect(statuses).toEqual([401, 401, 401, 401, 401, 429, 429, 429, 429, 429]);
+    expect(verifyMock).toHaveBeenCalledTimes(5); // 被擋的請求連雜湊都不做
+  });
+
   it('不存在的 email 一樣會鎖（行為相同，不能用鎖定與否判斷帳號存在）', async () => {
-    for (let i = 0; i < 6; i++) await login({ email: 'ghost@example.com', password: 'x' }, `8.8.8.${i}`);
+    await failFor(5, (i) => ({ over: { email: 'ghost@example.com', password: 'x' }, ip: `8.8.8.${i}` }));
     expect((await login({ email: 'ghost@example.com', password: 'x' }, '8.8.8.9')).status).toBe(429);
   });
-  it('同一 IP 失敗 5 次後，連換 email 也被擋；訊息與 email 鎖定相同', async () => {
-    for (let i = 0; i < 6; i++) await login({ email: `u${i}@example.com`, password: 'x' }, '7.7.7.7');
+
+  it('同一 IP 累積失敗 20 次後，連換 email 也被擋；訊息與 email 鎖定相同', async () => {
+    const statuses = await failFor(20, (i) => ({ over: { email: `u${i}@example.com`, password: 'x' }, ip: '7.7.7.7' }));
+    expect(statuses.every((s) => s === 401)).toBe(true);
+    await login({ email: 'u20@example.com', password: 'x' }, '7.7.7.7'); // 第 21 次失敗觸發鎖定
     const byIp = await login({ email: 'fresh@example.com' }, '7.7.7.7');
     expect(byIp.status).toBe(429);
-    for (let i = 0; i < 6; i++) await login({ password: 'wrong' }, `6.6.6.${i}`);
+    await failFor(5, (i) => ({ over: { password: 'wrong' }, ip: `6.6.6.${i}` }));
     const byEmail = await login({}, '6.6.6.9');
     expect(await byIp.json()).toEqual(await byEmail.json());
   });
-  it('成功登入會清掉計數（先前的失敗不留案底）', async () => {
+
+  it('穿插成功登入不能清掉 IP 的失敗計數（否則攻擊者用自己的帳號就能無限試別人的）', async () => {
+    for (let i = 0; i < 21; i++) {
+      expect((await login({ email: `v${i}@example.com`, password: 'x' }, '4.4.4.4')).status).toBe(401);
+      if (i % 5 === 4) expect((await login({}, '4.4.4.4')).status).toBe(200); // 自己的帳號成功登入
+    }
+    expect((await login({ email: 'next@example.com', password: 'x' }, '4.4.4.4')).status).toBe(429);
+  });
+
+  it('成功登入只清掉該 email 的計數，不清 IP 的', async () => {
     for (let i = 0; i < 3; i++) await login({ password: 'wrong' });
     expect((await login()).status).toBe(200);
     expect(bucket('login:alice@example.com')).toBeUndefined();
-    expect(bucket('login:1.1.1.1')).toBeUndefined();
+    expect(bucket('login:1.1.1.1')!.count).toBe(3);
+  });
+
+  it('被鎖的 email 在鎖定期間，其他 email 不受影響', async () => {
+    await failFor(6, (i) => ({ over: { password: 'wrong' }, ip: `3.3.3.${i}` }));
+    addUser('u9', 'bob@example.com', HASH);
+    expect((await login({ email: 'bob@example.com' }, '3.3.3.200')).status).toBe(200);
+  });
+});
+
+describe('請求大小', () => {
+  it('以位元組計：字元數沒超過、位元組超過 16KB 的 body 一樣被拒', async () => {
+    // 認證資料都合法，只有無關欄位很大：6000 個中文字 ≈ 18000 位元組（字元數 < 16384）
+    const res = await login({ junk: '中'.repeat(6000) });
+    expect(res.status).toBe(400);
+    expect(verifyMock).not.toHaveBeenCalled();
+  });
+  it('超大的 body 只讀到上限就中止，不會整個讀進記憶體', async () => {
+    let pulled = 0;
+    const stream = new ReadableStream({ pull(c) { pulled++; c.enqueue(new Uint8Array(1024).fill(65)); if (pulled > 5000) c.close(); } });
+    const res = await createApp().request('/api/oauth/login', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'CF-Connecting-IP': '1.1.1.1' }, body: stream, duplex: 'half',
+    } as RequestInit, env);
+    expect(res.status).toBe(400);
+    expect(pulled).toBeLessThan(100);
   });
 });
 

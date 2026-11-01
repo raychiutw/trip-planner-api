@@ -19,26 +19,33 @@ export function createD1(opts: { through?: number } = {}): { db: D1Database; raw
   const applyMigrationsAfter = (n: number) => { for (const f of files.filter((x) => num(x) > n)) raw.exec(fs.readFileSync(path.join(dir, f), 'utf8')); };
   const prepare = (sql: string) => {
     let params: unknown[] = [];
+    const isRead = /^\s*(SELECT|WITH|PRAGMA)\b/i.test(sql) || /\bRETURNING\b/i.test(sql);
+    const exec = () => {
+      if (isRead) {
+        const rows = raw.prepare(sql).all(...(params as never[])) as Row[];
+        return { results: rows, success: true, meta: { changes: 0, last_row_id: 0, rows_read: rows.length, rows_written: 0, duration: 0 } };
+      }
+      const r = raw.prepare(sql).run(...(params as never[]));
+      return { results: [] as Row[], success: true, meta: { changes: Number(r.changes), last_row_id: Number(r.lastInsertRowid), rows_read: 0, rows_written: Number(r.changes), duration: 0 } };
+    };
     const stmt = {
       bind(...p: unknown[]) { params = p; return stmt; },
-      async first<T = Row>(): Promise<T | null> {
-        return (raw.prepare(sql).get(...(params as never[])) as T | undefined) ?? null;
+      async first<T = Row>(col?: string): Promise<T | null> {
+        const row = raw.prepare(sql).get(...(params as never[])) as Row | undefined;
+        if (!row) return null;
+        return (col === undefined ? row : row[col]) as T;
       },
-      async all<T = Row>(): Promise<{ results: T[] }> {
-        return { results: raw.prepare(sql).all(...(params as never[])) as T[] };
-      },
-      async run() {
-        const r = raw.prepare(sql).run(...(params as never[]));
-        return { success: true, meta: { changes: Number(r.changes) } };
-      },
+      async all<T = Row>() { return exec() as unknown as { results: T[] }; },
+      async raw<T = unknown[]>() { return (raw.prepare(sql).all(...(params as never[])) as Row[]).map((r) => Object.values(r)) as T[]; },
+      async run() { return exec(); },
+      __exec: exec,
     };
     return stmt;
   };
-  const batch = async (stmts: Array<{ run: () => Promise<unknown> }>) => {
+  const batch = async (stmts: Array<{ __exec: () => unknown }>) => {
     raw.exec('BEGIN');
     try {
-      const out = [];
-      for (const s of stmts) out.push(await s.run());
+      const out = stmts.map((s) => s.__exec());
       raw.exec('COMMIT');
       return out;
     } catch (e) {
@@ -46,5 +53,6 @@ export function createD1(opts: { through?: number } = {}): { db: D1Database; raw
       throw e;
     }
   };
-  return { db: { prepare, batch } as unknown as D1Database, raw, close: () => raw.close(), applyMigrationsAfter };
+  const execSql = async (sql: string) => { raw.exec(sql); return { count: 1, duration: 0 }; };
+  return { db: { prepare, batch, exec: execSql } as unknown as D1Database, raw, close: () => raw.close(), applyMigrationsAfter };
 }

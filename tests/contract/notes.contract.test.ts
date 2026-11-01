@@ -49,11 +49,11 @@ beforeAll(async () => {
 afterAll(async () => { await disposeMiniflare(); });
 
 const SECTIONS = [
-  { name: 'flights', row: S.Notes_Flight, create: { airline: 'CI', flight_no: 'CI100', cabin_class: 'Y', depart_airport: 'TPE', arrive_airport: 'OKA', depart_at: '2026-07-26T08:00', arrive_at: '2026-07-26T10:30', note: 'n' }, patch: { airline: 'BR' } },
-  { name: 'lodgings', row: S.Notes_Lodging, create: { name: 'Hotel', address: 'Naha', check_in_at: '2026-07-26', check_out_at: '2026-07-28', booking_no: 'B1', phone: '+81', note: 'n' }, patch: { name: 'Hotel2' } },
-  { name: 'reservations', row: S.Notes_Reservation, create: { kind: 'restaurant', title: 'Sushi', reserved_at: '2026-07-26T19:00', party_size: 2, reservation_no: 'R1', phone: '1', note: 'n' }, patch: { title: 'Ramen' }, badKind: { kind: 'bogus' } },
-  { name: 'pretrip', row: S.Notes_PretripNote, create: { section: '貨幣', title: '匯率', content: '- 日圓' }, patch: { title: '匯率2' } },
-  { name: 'emergency', row: S.Notes_EmergencyContact, create: { name: '警察', relationship: '報案', phone: '110', email: 'a@b.c', kind: 'police' }, patch: { name: '警察局' }, badKind: { kind: 'bogus' } },
+  { name: 'flights', row: S.Notes_Flight, input: S.Notes_FlightInput, patchSchema: S.Notes_FlightPatch, create: { sort_order: 0, airline: 'CI', flight_no: 'CI100', cabin_class: 'Y', depart_airport: 'TPE', arrive_airport: 'OKA', depart_at: '2026-07-26T08:00', arrive_at: '2026-07-26T10:30', note: 'n' }, patch: { sort_order: 1, airline: 'BR', flight_no: 'BR101', cabin_class: 'C', depart_airport: 'KHH', arrive_airport: 'NRT', depart_at: '2026-07-27T08:00', arrive_at: '2026-07-27T12:00', note: 'm' } },
+  { name: 'lodgings', row: S.Notes_Lodging, input: S.Notes_LodgingInput, patchSchema: S.Notes_LodgingPatch, create: { sort_order: 0, name: 'Hotel', address: 'Naha', check_in_at: '2026-07-26', check_out_at: '2026-07-28', booking_no: 'B1', phone: '+81', note: 'n' }, patch: { sort_order: 1, name: 'Hotel2', address: 'Chatan', check_in_at: '2026-07-27', check_out_at: '2026-07-29', booking_no: 'B2', phone: '+82', note: 'm' } },
+  { name: 'reservations', row: S.Notes_Reservation, input: S.Notes_ReservationInput, patchSchema: S.Notes_ReservationPatch, create: { sort_order: 0, kind: 'restaurant', title: 'Sushi', reserved_at: '2026-07-26T19:00', party_size: 2, reservation_no: 'R1', phone: '1', note: 'n' }, patch: { sort_order: 1, kind: 'ticket', title: 'Ramen', reserved_at: '2026-07-27T19:00', party_size: 4, reservation_no: 'R2', phone: '2', note: 'm' }, badKind: { kind: 'bogus' } },
+  { name: 'pretrip', row: S.Notes_PretripNote, input: S.Notes_PretripNoteInput, patchSchema: S.Notes_PretripNotePatch, create: { sort_order: 0, section: '貨幣', title: '匯率', content: '- 日圓' }, patch: { sort_order: 1, section: '通訊', title: '匯率2', content: '- eSIM' } },
+  { name: 'emergency', row: S.Notes_EmergencyContact, input: S.Notes_EmergencyContactInput, patchSchema: S.Notes_EmergencyContactPatch, create: { sort_order: 0, name: '警察', relationship: '報案', phone: '110', email: 'a@b.c', kind: 'police' }, patch: { sort_order: 1, name: '警察局', relationship: '失竊', phone: '119', email: 'd@e.f', kind: 'medical' }, badKind: { kind: 'bogus' } },
 ] as const;
 
 describe('五個區段：list／create／patch／reorder／delete', () => {
@@ -64,6 +64,7 @@ describe('五個區段：list／create／patch／reorder／delete', () => {
       const rowSchema = s.row;
 
       it('POST 201 → 列符合 schema；GET 列表符合 schema', async () => {
+        expectContract(s.input, s.create); // 送出的 body 必須符合文件的 body schema（欄位填滿）
         const res = await call('POST', t, url, { json: s.create });
         expect(res.status).toBe(201);
         expectContract(rowSchema, await res.json());
@@ -77,10 +78,16 @@ describe('五個區段：list／create／patch／reorder／delete', () => {
 
       it('PATCH 200 → 列符合 schema；reorder 200；', async () => {
         const items = ((await (await call('GET', t, url)).json()) as { items: { id: number; version: number }[] }).items;
-        const p = await call('PATCH', `${t}/{rowId}`, `${url}/${items[0]!.id}`, { json: { ...s.patch, expectedVersion: items[0]!.version } });
+        const patchBody = { ...s.patch, expectedVersion: items[0]!.version };
+        expectContract(s.patchSchema, patchBody);
+        const p = await call('PATCH', `${t}/{rowId}`, `${url}/${items[0]!.id}`, { json: patchBody });
         expect(p.status).toBe(200);
-        expectContract(rowSchema, await p.json());
-        const r = await call('PATCH', `${t}/reorder`, `${url}/reorder`, { json: { items: [{ id: items[0]!.id, sortOrder: 5 }, { id: items[1]!.id, sortOrder: 4 }] } });
+        const patched = await p.json() as Record<string, unknown>;
+        expectContract(rowSchema, patched);
+        expect(patched.version).toBe(items[0]!.version + 1);
+        const reorderBody = { items: [{ id: items[0]!.id, sortOrder: 5 }, { id: items[1]!.id, sortOrder: 4 }] };
+        expectContract(S.Notes_ReorderInput, reorderBody);
+        const r = await call('PATCH', `${t}/reorder`, `${url}/reorder`, { json: reorderBody });
         expect(r.status).toBe(200);
         expectContract(S.Notes_ReorderResult, await r.json());
       });
@@ -104,10 +111,15 @@ describe('五個區段：list／create／patch／reorder／delete', () => {
         const bad = await call('POST', t, url, { raw: '{oops' });
         expect(bad.status).toBe(400);
         expectContract(ApiError, await bad.json());
-        if ('badKind' in s) expect((await call('POST', t, url, { json: s.badKind })).status).toBe(400);
+        if ('badKind' in s) {
+          expect((await call('POST', t, url, { json: s.badKind })).status).toBe(400);
+          expect(s.input.safeParse(s.badKind).success, '文件的 body schema 也要判定 enum 不合法').toBe(false);
+          expect(s.patchSchema.safeParse(s.badKind).success).toBe(false);
+        }
         for (const body of [{ items: [] }, { items: [{ id: 1, sortOrder: 1 }, { id: 1, sortOrder: 2 }] }, { items: [{ id: -1, sortOrder: 0 }] }, { items: [{ id: 1, sortOrder: -1 }] }]) {
           const r = await call('PATCH', `${t}/reorder`, `${url}/reorder`, { json: body });
           expect(r.status).toBe(400);
+          expect(S.Notes_ReorderInput.safeParse(body).success, `文件的 reorder schema 也要拒絕 ${JSON.stringify(body)}`).toBe(false);
           expectContract(ApiError, await r.json());
         }
       });
@@ -218,7 +230,9 @@ describe('AI 列：maintenance 與排除項', () => {
   const MT = '/{section}/{rowId}/maintenance';
 
   it('maintenance 200（pretrip）→ 列符合 schema；emergency 也符合', async () => {
-    const res = await call('PATCH', MT, m('pretrip', aiRow.id), { json: { managedBy: 'human', expectedVersion: aiRow.version } });
+    const mBody = { managedBy: 'human', expectedVersion: aiRow.version };
+    expectContract(S.Notes_MaintenanceInput, mBody);
+    const res = await call('PATCH', MT, m('pretrip', aiRow.id), { json: mBody });
     expect(res.status).toBe(200);
     expectContract(S.Notes_MaintenanceRow, await res.json());
     const em = await db.prepare(`INSERT INTO trip_emergency_contacts (trip_id, name, phone, kind, ai_generated, origin, managed_by) VALUES (?, 'X', '1', 'police', 1, 'ai', 'ai') RETURNING id`).bind(trip).first<{ id: number }>();
@@ -231,6 +245,10 @@ describe('AI 列：maintenance 與排除項', () => {
     const bad = await call('PATCH', MT, m('pretrip', aiRow.id), { json: { managedBy: 'robot', expectedVersion: 0 } });
     expect(bad.status).toBe(400);
     expectContract(ApiError, await bad.json());
+    for (const b of [{ managedBy: 'robot', expectedVersion: 0 }, { expectedVersion: 0 }, { managedBy: 'human' }, { managedBy: 'human', expectedVersion: -1 }]) {
+      expect((await call('PATCH', MT, m('pretrip', aiRow.id), { json: b })).status).toBe(400);
+      expect(S.Notes_MaintenanceInput.safeParse(b).success, `文件 schema 也要拒絕 ${JSON.stringify(b)}`).toBe(false);
+    }
     expect((await call('PATCH', MT, m('flights', aiRow.id), { json: { managedBy: 'human', expectedVersion: 0 } })).status).toBe(400);
     const nf = await call('PATCH', MT, m('pretrip', 999999), { json: { managedBy: 'human', expectedVersion: 0 } });
     expect(nf.status).toBe(404);

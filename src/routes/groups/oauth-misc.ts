@@ -98,17 +98,17 @@ export function registerOauthMiscRoutes(app: OpenAPIHono<AppEnv>): void {
     } } });
   legacyRoute(app, { method: 'get', path: '/api/oauth/login/google', auth: 'none', handler: loginGoogleGet, summary: 'Google 登入（導向 Google）',
     docs: { query: OauthMisc_LoginGoogleQuery, responses: {
-      302: { description: '導向 https://accounts.google.com/o/oauth2/v2/auth（query 含 response_type、client_id、redirect_uri、scope、state、nonce、code_challenge、code_challenge_method；purpose=account-delete 另帶 prompt=select_account、max_age=0、claims={"id_token":{"auth_time":{"essential":true}}}，state 5 分鐘有效）；可導回 client 的驗證錯誤：Location 為 redirect_uri?error=...（無 JSON 內容）' },
+      302: { description: '導向 https://accounts.google.com/o/oauth2/v2/auth（query 含 response_type、client_id、redirect_uri、scope、state、nonce、code_challenge、code_challenge_method；purpose=account-delete 另帶 prompt=select_account、max_age=0、claims={"id_token":{"auth_time":{"essential":true}}}，state 5 分鐘有效）；web surface 的 challenge 已取消／過期／用過：Location 為 ${WEB_ORIGIN}/account?deleteReauth=failed（狀態不動）；可導回 client 的驗證錯誤：Location 為 redirect_uri?error=...（無 JSON 內容）' },
       400: oerr('client／redirect_uri 有問題（不可導回 client），或 dpop_jkt 格式不正確（invalid_request）'),
-      403: err('purpose=account-delete：沒帶 challenge，或 challenge 不存在／已過期／client 與環境不符／狀態不是 pending 或 started（ACCOUNT_DELETE_REAUTH_REQUIRED）'),
+      403: err('purpose=account-delete：沒帶 challenge，或 challenge 不存在，或 mobile challenge 已過期／client 與環境不符／狀態不是 pending 或 started，或 web challenge 的 client 不是 tripline-web（ACCOUNT_DELETE_REAUTH_REQUIRED）'),
       503: err('尚未設定 Google 登入（OAUTH_NOT_CONFIGURED）'),
     } } });
   legacyRoute(app, { method: 'get', path: '/api/oauth/callback/google', auth: 'none', handler: callbackGoogleGet, summary: 'Google 登入 callback',
     docs: { query: OauthMisc_CallbackGoogleQuery, responses: {
-      302: { description: '成功：Location 為 client 註冊的 redirect_uri?code=<我們的 code>&state=...；帳號刪除重新驗證（state 帶 reauth）：Location 為 mobile callback?challenge_id=…&status=verified，任何失敗為 status=failed（不發 code、不建 user）；使用者在 Google 取消：redirect_uri?error=access_denied&state=...（無 JSON 內容）' },
+      302: { description: '成功：Location 為 client 註冊的 redirect_uri?code=<我們的 code>&state=...；帳號刪除重新驗證（state 帶 reauth）：mobile surface：Location 為 mobile callback?challenge_id=…&status=verified，任何失敗為 status=failed；web surface：Location 為 ${WEB_ORIGIN}/account?deleteReauth=done，任何失敗（含取消、過期）為 deleteReauth=failed（固定網址，不收呼叫者參數；皆不發 code、不建 user）；使用者在 Google 取消：redirect_uri?error=access_denied&state=...（無 JSON 內容）' },
       400: err('state 無效、過期或已使用（OAUTH_INVALID_STATE），或 Google email 未驗證（OAUTH_EMAIL_UNVERIFIED）'),
       401: err('Google id_token 驗證失敗或 nonce 不符（OAUTH_INVALID_ID_TOKEN）'),
-      403: err('帳號已停用（OAUTH_ACCOUNT_SUSPENDED）；帳號刪除重新驗證失敗且沒有可導回的 mobile challenge（ACCOUNT_DELETE_REAUTH_REQUIRED）'),
+      403: err('帳號已停用（OAUTH_ACCOUNT_SUSPENDED）；帳號刪除重新驗證失敗且沒有可導回的 challenge（state 的 client 與 surface 不符）（ACCOUNT_DELETE_REAUTH_REQUIRED）'),
       409: err('email 已註冊但未驗證（OAUTH_EMAIL_CONFLICT）'),
       502: err('向 Google 換 token 失敗（OAUTH_TOKEN_EXCHANGE_FAILED）'),
       503: err('尚未設定 Google 登入（OAUTH_NOT_CONFIGURED）'),

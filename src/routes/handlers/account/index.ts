@@ -9,10 +9,11 @@
  *
  * Body（擇一）:
  *   { password: string }  — 帳號有 local 密碼身分時**必須**帶，做二次確認
- *   { confirm: 'DELETE', challengeId: string } — 無密碼帳號：確認字串之外，還要先完成同帳號的近期 Google 重新驗證
+ *   { confirm: 'DELETE', challengeId: string } — 無密碼帳號（mobile）：確認字串之外，還要先完成同帳號的近期 Google 重新驗證
+ *   { challengeId: string } — 無密碼帳號（web，tripline-web）：不需要 confirm，Google 重新驗證本身就是確認；web 帶 confirm 也接受
  *     （POST /api/account/delete-reauth 建立 challenge → 使用者在 Google 驗證 → challenge 變 verified）。
  *     **fail-closed**：只帶 confirm、沒有 verified challenge → 403 ACCOUNT_DELETE_REAUTH_REQUIRED。
- *     新 api 沒有 cookie session，舊入口「瀏覽器 proof」那條不存在，所以非 mobile client 的無密碼帳號一律走不通。
+ *     challenge 必須與呼叫者同 surface（mobile／web 不可互用）；其他 client 的無密碼帳號一律走不通。
  *
  * Response 200: { ok: true, tripsDeleted, auditRowsAnonymized, tablesCleared }
  *   token／授權／challenge 在同一個 D1 batch 內清除（eraseUserAccount）；抹除失敗整批回滾，
@@ -29,8 +30,7 @@ import { AppError } from '../../../errors';
 import { rawJson } from '../../../lib/utils';
 import { verifyPassword } from '../../../lib/password';
 import { eraseUserAccount } from '../../../lib/erasure';
-import { mobileOAuthContract } from '../../../lib/mobile-oauth';
-import { readMobileDeleteChallenge, transitionMobileDeleteChallenge } from '../../../lib/delete-reauth';
+import { hasVerifiedChallenge, readMobileDeleteChallenge, resolveAccountSurface, transitionMobileDeleteChallenge } from '../../../lib/delete-reauth';
 import type { Env } from '../../../env';
 
 interface DeleteAccountBody {
@@ -65,7 +65,7 @@ async function findLocalPasswordHash(env: Env, userId: string): Promise<string |
  *
  * Response: { hasPassword, reauthProvider, reauthenticated, tripsOwned, collaboratorsAffected }
  *   - reauthProvider：無密碼帳號可用的重新驗證 provider（目前只有 'google'）；有密碼或沒有 Google 身分時為 null
- *   - reauthenticated：新 api 沒有瀏覽器 proof，證明在 challenge 上，這裡恆為 false（欄位為與舊入口的 wire 相容而保留）
+ *   - reauthenticated：web 呼叫者＝本 grant 有 verified、未過期、未使用的 web challenge；mobile 恆為 false（證明在 challenge 狀態查詢）
  */
 export const onRequestGet: PagesFunction<Env> = async (context) => {
   const session = await requireAccountUser(context);
@@ -92,10 +92,15 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     .bind(userId, userId)
     .first<{ n: number }>();
 
+  // web 呼叫者：本 grant 有 verified、未過期、未使用的 web challenge 才算已重新驗證；mobile 維持 false（證明由 challenge 狀態查詢）。
+  const surface = hasPassword ? null : resolveAccountSurface(session.auth, context.env, context.request);
+  const reauthenticated = surface === 'web' &&
+    await hasVerifiedChallenge(context.env.DB, { uid: userId, grantId: session.auth.grantId!, clientId: session.auth.clientId!, surface });
+
   return rawJson({
     hasPassword,
     reauthProvider: googleIdentity ? 'google' : null,
-    reauthenticated: false,
+    reauthenticated,
     tripsOwned: owned?.n ?? 0,
     collaboratorsAffected: collab?.n ?? 0,
   });
@@ -127,20 +132,21 @@ export const onRequestDelete: PagesFunction<Env> = async (context) => {
       throw new AppError('ACCOUNT_DELETE_PASSWORD_INVALID');
     }
   } else {
-    // 顯式確認防誤觸；近期 Google 身分驗證才是刪除授權。
-    if (body.confirm !== CONFIRM_PHRASE) {
+    // 呼叫面：mobile 要確認字串；web 的確認就是使用者在 Google 的重新驗證，不要求 confirm。其他 client 一律 fail-closed。
+    const surface = resolveAccountSurface(actor.auth, context.env, context.request);
+    // web 帶了 challengeId 就不要求 confirm；什麼都沒帶（沒有 confirm 也沒有 challengeId）仍回 400，維持原本的提示。
+    if (body.confirm !== CONFIRM_PHRASE && !(surface === 'web' && typeof body.challengeId === 'string')) {
       throw new AppError(
         'ACCOUNT_DELETE_CONFIRM_REQUIRED',
         `請輸入 ${CONFIRM_PHRASE} 以確認刪除`,
       );
     }
-    // fail-closed：沒有 verified、同帳號、同 grant、與環境相符 client 的 challenge 就不放行。
+    // fail-closed：沒有 verified、同帳號、同 grant、同 client、同 surface 的 challenge 就不放行。
     const challengeId = typeof body.challengeId === 'string' ? body.challengeId : '';
-    const contract = mobileOAuthContract(context.env, context.request);
-    const challenge = challengeId ? await readMobileDeleteChallenge(context.env.DB, challengeId) : null;
-    if (!contract || !challenge || !grant.grantId || grant.clientId !== contract.clientId ||
+    const challenge = surface && challengeId ? await readMobileDeleteChallenge(context.env.DB, challengeId) : null;
+    if (!surface || !challenge || !grant.grantId || challenge.surface !== surface ||
         challenge.uid !== userId || challenge.grantId !== grant.grantId ||
-        challenge.clientId !== contract.clientId || challenge.expired ||
+        challenge.clientId !== grant.clientId || challenge.expired ||
         !(await transitionMobileDeleteChallenge(context.env.DB, challengeId, userId, grant.grantId, 'verified', 'used'))) {
       throw new AppError('ACCOUNT_DELETE_REAUTH_REQUIRED');
     }

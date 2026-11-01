@@ -226,9 +226,9 @@ describe('/api/account（刪除預覽／刪除）', () => {
     const oauth = await sessionFor(db, 'acct-del-oauth@test.com', undefined, { clientId: 'tripline-mobile' });
     await db.prepare("INSERT INTO auth_identities (user_id, provider, provider_user_id) VALUES (?, 'google', 'acct-del-oauth-sub')").bind(oauth.userId).run();
     expectContract(S.Account_DeletePreview, await (await api.get('/api/account', { bearer: oauth.bearer })).json());
-    await expectApiError(await hit('/api/account', 'delete', '/api/account', { bearer: oauth.bearer, json: {} }), 400, 'ACCOUNT_DELETE_CONFIRM_REQUIRED');
-    await expectApiError(await hit('/api/account', 'delete', '/api/account', { bearer: oauth.bearer, json: invalid(S.Account_DeleteBody, { confirm: 'delete' }) }), 400, 'ACCOUNT_DELETE_CONFIRM_REQUIRED');
-    await expectApiError(await hit('/api/account', 'delete', '/api/account', { bearer: oauth.bearer, json: valid(S.Account_DeleteBody, { confirm: 'DELETE' }) }), 403, 'ACCOUNT_DELETE_REAUTH_REQUIRED');
+    await expectApiError(await hit('/api/account', 'delete', 'https://api.test/api/account', { bearer: oauth.bearer, json: {} }, apiMobile), 400, 'ACCOUNT_DELETE_CONFIRM_REQUIRED');
+    await expectApiError(await hit('/api/account', 'delete', 'https://api.test/api/account', { bearer: oauth.bearer, json: invalid(S.Account_DeleteBody, { confirm: 'delete' }) }, apiMobile), 400, 'ACCOUNT_DELETE_CONFIRM_REQUIRED');
+    await expectApiError(await hit('/api/account', 'delete', 'https://api.test/api/account', { bearer: oauth.bearer, json: valid(S.Account_DeleteBody, { confirm: 'DELETE' }) }, apiMobile), 403, 'ACCOUNT_DELETE_REAUTH_REQUIRED');
     const challengeId = await createMobileDeleteChallenge(db, oauth.userId, oauth.grantId, 'tripline-mobile');
     await db.prepare("UPDATE oauth_models SET payload = json_set(payload, '$.status', 'verified') WHERE name = 'AccountDeleteChallenge' AND id = ?").bind(challengeId).run();
     const ok = await hit('/api/account', 'delete', 'https://api.test/api/account', { bearer: oauth.bearer, json: valid(S.Account_DeleteBody, { confirm: 'DELETE', challengeId }) }, apiMobile);
@@ -253,6 +253,22 @@ describe('/api/account（刪除預覽／刪除）', () => {
     const ok2 = await hit('/api/account', 'delete', '/api/account', { bearer: pw.bearer, json: valid(S.Account_DeleteBody, { password: 'correct-horse-1' }) });
     expect(ok2.status).toBe(200);
     expectContract(S.Account_DeleteResult, await ok2.json());
+  });
+
+  it('web（tripline-web）無密碼帳號：預覽 reauthenticated 隨 verified challenge 變 true；DELETE 只帶 { challengeId }；web 只帶 confirm → 403', async () => {
+    const w = await sessionFor(db, 'acct-del-web@test.com', undefined, { clientId: 'tripline-web' });
+    await db.prepare("INSERT INTO auth_identities (user_id, provider, provider_user_id) VALUES (?, 'google', 'acct-del-web-sub')").bind(w.userId).run();
+    const U = 'https://api.test/api/account';
+    const preview = async () => (await (await apiMobile.request('GET', U, { bearer: w.bearer })).json()) as { reauthProvider: string; reauthenticated: boolean };
+    expect(await preview()).toMatchObject({ reauthProvider: 'google', reauthenticated: false });
+    await expectApiError(await hit('/api/account', 'delete', U, { bearer: w.bearer, json: valid(S.Account_DeleteBody, { confirm: 'DELETE' }) }, apiMobile), 403, 'ACCOUNT_DELETE_REAUTH_REQUIRED');
+    const created = await (await apiMobile.request('POST', 'https://api.test/api/account/delete-reauth', { bearer: w.bearer })).json() as { challengeId: string };
+    expectContract(S.Account_DeleteReauthStarted, created);
+    await db.prepare("UPDATE oauth_models SET payload = json_set(payload, '$.status', 'verified') WHERE name = 'AccountDeleteChallenge' AND id = ?").bind(created.challengeId).run();
+    expect((await preview()).reauthenticated).toBe(true);
+    const ok = await hit('/api/account', 'delete', U, { bearer: w.bearer, json: valid(S.Account_DeleteBody, { challengeId: created.challengeId }) }, apiMobile);
+    expect(ok.status).toBe(200);
+    expectContract(S.Account_DeleteResult, await ok.json());
   });
 
   it('未登入 → 401 AUTH_REQUIRED；第三方 client → 403', async () => {
@@ -297,12 +313,12 @@ describe('/api/account/delete-reauth', () => {
     expect(await db.prepare("SELECT 1 FROM oauth_models WHERE id = ?").bind(fresh.challengeId).first()).not.toBeNull();
   });
 
-  it('錯誤：401 未登入；403 非 mobile client／沒有 Google 身分／已過期的取消；400 沒帶 challenge_id；404 別人的；409 已 used；500 設定不符', async () => {
+  it('錯誤：401 未登入；403 非 mobile／web client／沒有 Google 身分／已過期的取消；400 沒帶 challenge_id；404 別人的；409 已 used；500 設定不符', async () => {
     const s = await sessionFor(db, 'acct-reauth-err@test.com', undefined, { clientId: 'tripline-mobile' });
     const other = await sessionFor(db, 'acct-reauth-err-other@test.com', undefined, { clientId: 'tripline-mobile' });
     for (const m of ['POST', 'GET', 'DELETE']) await expectApiError(await call(m, undefined, '?challenge_id=x'), 401, 'AUTH_REQUIRED');
-    // 非 mobile client（owner 的 tripline-web token）
-    const web = (await sessionFor(db, 'acct-reauth-err@test.com', undefined, { clientId: 'tripline-web' })).bearer;
+    // 非 mobile 非 web 的 client
+    const web = (await sessionFor(db, 'acct-reauth-err@test.com', undefined, { clientId: 'tripline-tp-request' })).bearer;
     for (const m of ['POST', 'GET', 'DELETE']) await expectApiError(await call(m, web, '?challenge_id=x'), 403, 'PERM_DENIED');
     // 沒有 Google 身分 → 403 ACCOUNT_DELETE_REAUTH_REQUIRED
     await expectApiError(await call('POST', s.bearer), 403, 'ACCOUNT_DELETE_REAUTH_REQUIRED');

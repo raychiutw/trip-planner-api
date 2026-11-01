@@ -43,15 +43,15 @@ export const Account_ConnectedAppRevoked = z.object({
 export const Account_DeletePreview = z.object({
   hasPassword: z.boolean().openapi({ description: '有 local 密碼身分 → 刪除時必須帶 password；否則要走 Google 重新驗證 challenge' }),
   reauthProvider: z.enum(['google']).nullable().openapi({ description: '無密碼帳號可用的重新驗證 provider（目前只有 google）；有密碼或沒有 Google 身分時為 null（此時無法刪除，fail-closed）' }),
-  reauthenticated: z.boolean().openapi({ description: '新 api 沒有瀏覽器 proof，證明在 challenge 上，恆為 false（與舊入口 wire 相容而保留）' }),
+  reauthenticated: z.boolean().openapi({ description: 'web 呼叫者（tripline-web）：本 grant 有一個 verified、未過期、未使用的 web challenge 時為 true；其餘（含 mobile、有密碼帳號）恆為 false' }),
   tripsOwned: z.number().int(),
   collaboratorsAffected: z.number().int().openapi({ description: '這些行程上「不是自己」的 distinct 共編者人數' }),
 }).openapi('Account_DeletePreview');
 
 export const Account_DeleteBody = z.object({
   password: z.string().optional().openapi({ description: '帳號有 local 密碼身分時必填' }),
-  confirm: z.literal('DELETE').optional().openapi({ description: '無密碼帳號的確認字串；只帶它不夠，還要 challengeId' }),
-  challengeId: z.string().optional().openapi({ description: '無密碼帳號必填：POST /api/account/delete-reauth 取得、且已 verified（同帳號、同 grant、未過期）的 challenge；只能消耗一次' }),
+  confirm: z.literal('DELETE').optional().openapi({ description: '無密碼帳號的確認字串。mobile 必填；web（tripline-web）不需要（Google 重新驗證即確認，帶了也接受）。只帶它不夠，還要 challengeId' }),
+  challengeId: z.string().optional().openapi({ description: '無密碼帳號必填：POST /api/account/delete-reauth 取得、且已 verified（同帳號、同 grant、同 client、同 surface〔web／mobile 不可互用〕、未過期）的 challenge；只能消耗一次。web 的完整 body 為 { "challengeId": "<id>" }' }),
 }).openapi('Account_DeleteBody');
 
 export const Account_DeleteResult = z.object({
@@ -62,11 +62,11 @@ export const Account_DeleteResult = z.object({
   tablesCleared: z.record(z.string(), z.number().int()),
 }).openapi('Account_DeleteResult');
 
-// ───────── 帳號刪除的 Google 重新驗證（mobile challenge）─────────
+// ───────── 帳號刪除的 Google 重新驗證 challenge（mobile 與 web）─────────
 
 export const Account_DeleteReauthStarted = z.object({
   challengeId: z.string(),
-  authorizeUrl: z.string().openapi({ description: '用瀏覽器開啟：/api/oauth/login/google?purpose=account-delete&challenge=<challengeId>' }),
+  authorizeUrl: z.string().openapi({ description: '用瀏覽器開啟（導覽，不能帶 bearer）：/api/oauth/login/google?purpose=account-delete&challenge=<challengeId>；Google 驗證後 mobile 導回 mobile callback（?challenge_id=…&status=…），web 導回 ${WEB_ORIGIN}/account?deleteReauth=done|failed（固定網址，不收呼叫者傳入的網址）' }),
   expiresIn: z.literal(300).openapi({ description: 'challenge 與 Google 驗證的有效期（秒）；Google auth_time 也必須在這段時間內' }),
 }).openapi('Account_DeleteReauthStarted', {
   example: {

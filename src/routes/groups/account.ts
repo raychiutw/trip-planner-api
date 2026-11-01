@@ -76,18 +76,18 @@ export function registerAccountRoutes(app: OpenAPIHono<AppEnv>): void {
         200: { description: '帳號與所擁有的行程（含共編者的）已抹除；所有 token／授權一併清除', schema: S.Account_DeleteResult },
         400: err('沒帶二次確認：有密碼的帳號沒給 password，或無密碼帳號的 confirm 不是 "DELETE"（code: ACCOUNT_DELETE_CONFIRM_REQUIRED）'),
         401: err('未登入（AUTH_REQUIRED），或密碼錯誤且資料未動（ACCOUNT_DELETE_PASSWORD_INVALID）'),
-        403: err('token 屬於非第一方 client 或受限 token（PERM_DENIED）；或無密碼帳號沒有「verified、同帳號、同 grant、未過期、與環境相符 client」的 challenge（ACCOUNT_DELETE_REAUTH_REQUIRED，fail-closed，資料未動）'),
+        403: err('token 屬於非第一方 client 或受限 token（PERM_DENIED）；或無密碼帳號沒有「verified、同帳號、同 grant、同 client、同 surface（web／mobile 不可互用）、未過期」的 challenge，含 web 只帶 confirm、非 web 非 mobile 的 client（ACCOUNT_DELETE_REAUTH_REQUIRED，fail-closed，資料未動）'),
       },
     },
   });
-  const E403_MOBILE = err('不是與環境相符的 mobile client 簽發、綁 grant 的 user token（PERM_DENIED）');
+  const E403_MOBILE = err('不是 mobile／web（tripline-web）client 簽發、綁 grant 的 user token（PERM_DENIED）');
   legacyRoute(app, {
     method: 'post', path: '/api/account/delete-reauth', auth: 'required', handler: accountDeleteReauthPost, summary: '建立帳號刪除的 Google 重新驗證 challenge',
     docs: { responses: {
-      200: { description: '已建立 challenge（5 分鐘有效，Cache-Control: no-store）。用瀏覽器開 authorizeUrl 完成 Google 驗證後，callback 會 302 回 mobile callback ?challenge_id=…&status=verified（失敗為 status=failed）', schema: S.Account_DeleteReauthStarted },
+      200: { description: '已建立 challenge（5 分鐘有效，Cache-Control: no-store）。用瀏覽器開 authorizeUrl 完成 Google 驗證後，callback 會 302：mobile 回 mobile callback ?challenge_id=…&status=verified（失敗為 status=failed）；web（tripline-web）回固定網址 ${WEB_ORIGIN}/account?deleteReauth=done（驗證失敗、取消、過期一律 deleteReauth=failed；WEB_ORIGIN 缺省用 PUBLIC_ORIGIN）。同一路徑依呼叫者的 client 自動判斷 surface', schema: S.Account_DeleteReauthStarted },
       401: E401,
-      403: err('不是與環境相符的 mobile client 簽發、綁 grant 的 user token（PERM_DENIED）；或此帳號沒有 Google 身分（ACCOUNT_DELETE_REAUTH_REQUIRED）'),
-      500: err('MOBILE_OAUTH_CALLBACK_URL 未設定、無效，或與環境契約不符（SERVER_MISCONFIG）'),
+      403: err('不是「與環境相符的 mobile client」或「tripline-web（Origin 須在 ALLOWED_ORIGINS）」簽發、綁 grant 的 user token（PERM_DENIED）；或此帳號沒有 Google 身分（ACCOUNT_DELETE_REAUTH_REQUIRED）'),
+      500: err('mobile：MOBILE_OAUTH_CALLBACK_URL 未設定、無效，或與環境契約不符；web：WEB_ORIGIN／PUBLIC_ORIGIN 未設定或無效（非 https、帶 path／query／userinfo）（SERVER_MISCONFIG）'),
     } },
   });
   legacyRoute(app, {
@@ -96,7 +96,7 @@ export function registerAccountRoutes(app: OpenAPIHono<AppEnv>): void {
       200: { description: 'challenge 狀態（Cache-Control: no-store）；過期為 expired', schema: S.Account_DeleteReauthStatus },
       400: E400('沒帶 challenge_id'),
       401: E401, 403: E403_MOBILE,
-      404: err('challenge 不存在，或不屬於這個使用者／grant／client；一律同一個回應（DATA_NOT_FOUND）'),
+      404: err('challenge 不存在，或不屬於這個使用者／grant／client／surface；一律同一個回應（DATA_NOT_FOUND）'),
     } },
   });
   legacyRoute(app, {
@@ -105,8 +105,8 @@ export function registerAccountRoutes(app: OpenAPIHono<AppEnv>): void {
       200: { description: 'pending／started／verified 轉為 cancelled；cancelled 重複取消維持 cancelled；failed 冪等維持 failed', schema: S.Account_DeleteReauthCancelled },
       400: E400('沒帶 challenge_id'),
       401: E401,
-      403: err('不是 mobile client 的 token（PERM_DENIED）；或 challenge 已過期（ACCOUNT_DELETE_REAUTH_REQUIRED）'),
-      404: err('challenge 不存在，或不屬於這個使用者／grant／client（DATA_NOT_FOUND）'),
+      403: err('不是 mobile／web client 的 token（PERM_DENIED）；或 challenge 已過期（ACCOUNT_DELETE_REAUTH_REQUIRED）'),
+      404: err('challenge 不存在，或不屬於這個使用者／grant／client／surface（DATA_NOT_FOUND）'),
       409: err('challenge 已 used（已用來刪帳號），或取消時狀態剛被並行請求改變（DATA_CONFLICT）'),
     } },
   });

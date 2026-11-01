@@ -116,7 +116,7 @@ describe('POST /api/account/delete-reauth：建立 challenge', () => {
     expect(body.authorizeUrl).toBe(`${ORIGIN}/api/oauth/login/google?purpose=account-delete&challenge=${body.challengeId}`);
     const row = await db.prepare("SELECT payload, expires_at FROM oauth_models WHERE name = 'AccountDeleteChallenge' AND id = ?")
       .bind(body.challengeId).first<{ payload: string; expires_at: number }>();
-    expect(JSON.parse(row!.payload)).toEqual({ uid: u.id, grantId: u.grantId, clientId: 'tripline-mobile', status: 'pending' });
+    expect(JSON.parse(row!.payload)).toEqual({ uid: u.id, grantId: u.grantId, clientId: 'tripline-mobile', status: 'pending', surface: 'mobile' });
     expect(row!.expires_at).toBeGreaterThanOrEqual(before + 300_000);
     expect(row!.expires_at).toBeLessThanOrEqual(Date.now() + 300_000);
   });
@@ -128,9 +128,9 @@ describe('POST /api/account/delete-reauth：建立 challenge', () => {
     expect(n!.n).toBe(0);
   });
 
-  it('未登入 → 401；非 mobile client（web）、受限 token、環境不符的 mobile client → 403 PERM_DENIED', async () => {
+  it('未登入 → 401；非 mobile 非 web 的 client、受限 token、環境不符的 mobile client → 403 PERM_DENIED', async () => {
     expect((await api.request('POST', reauthUrl())).status).toBe(401);
-    const web = await seed({ clientId: 'tripline-web' });
+    const web = await seed({ clientId: 'tripline-tp-request' });
     const r1 = await api.request('POST', reauthUrl(), { bearer: web.token });
     expect(r1.status).toBe(403);
     expect(await errorCode(r1)).toBe('PERM_DENIED');
@@ -169,12 +169,12 @@ describe('GET／DELETE /api/account/delete-reauth：查狀態、取消', () => {
     expect(await (await api.get(reauthUrl(started.challengeId), { bearer: u.token })).json()).toEqual({ status: 'cancelled' });
   });
 
-  it('沒帶 challenge_id → 400 DATA_VALIDATION；非 mobile client → 403 PERM_DENIED；未登入 → 401', async () => {
+  it('沒帶 challenge_id → 400 DATA_VALIDATION；非 mobile 非 web client → 403 PERM_DENIED；未登入 → 401', async () => {
     const u = await seed();
     const noId = await api.get(reauthUrl(), { bearer: u.token });
     expect(noId.status).toBe(400);
     expect(await errorCode(noId)).toBe('DATA_VALIDATION');
-    const web = await seed({ clientId: 'tripline-web' });
+    const web = await seed({ clientId: 'tripline-tp-request' });
     expect((await api.get(reauthUrl('x'), { bearer: web.token })).status).toBe(403);
     expect((await api.get(reauthUrl('x'))).status).toBe(401);
     expect((await cancel(u.token, '')).status).toBe(400);
@@ -259,12 +259,12 @@ describe('DELETE /api/account：mobile challenge 只有 verified 才能消耗', 
     expect([await statusOf(wrongUid), await statusOf(wrongGrant)]).toEqual(['verified', 'verified']);
   });
 
-  it('web client（沒有 mobile 的 challenge 路徑）的無密碼帳號：即使有人手上有別人 verified 的 challenge 也刪不掉', async () => {
+  it('web client 拿 mobile surface（含舊紀錄）的 verified challenge 也刪不掉（web 路徑見 account-delete-reauth-web.test.ts）', async () => {
     const web = await seed({ clientId: 'tripline-web' });
     const mobile = await seed();
     const cid = await challengeIn(mobile, 'verified');
     await expectReauthRequired(await del(web.token, { confirm: 'DELETE', challengeId: cid }));
-    const own = await challengeIn(web, 'verified', { clientId: 'tripline-web' });
+    const own = await challengeIn(web, 'verified', { clientId: 'tripline-web' }); // createMobileDeleteChallenge 預設 surface=mobile
     await expectReauthRequired(await del(web.token, { confirm: 'DELETE', challengeId: own }));
     expect(await userExists(web.id)).toBe(true);
     expect(await statusOf(own)).toBe('verified');
@@ -339,7 +339,7 @@ describe('GET /api/oauth/login/google?purpose=account-delete', () => {
     expect(google.headers.get('Set-Cookie')).toBeNull();
     const row = await db.prepare("SELECT payload, expires_at FROM oauth_models WHERE name = 'GoogleLoginState' AND id = ?").bind(state).first<{ payload: string; expires_at: number }>();
     const payload = JSON.parse(row!.payload);
-    expect(payload.reauth).toEqual({ uid: u.id, challengeId, grantId: u.grantId, clientId: 'tripline-mobile' });
+    expect(payload.reauth).toEqual({ uid: u.id, challengeId, grantId: u.grantId, clientId: 'tripline-mobile', surface: 'mobile' });
     expect(payload.redirect_uri).toBe(MOBILE_PROD_REDIRECT);
     expect(row!.expires_at).toBeGreaterThanOrEqual(before + 300_000);
     expect(row!.expires_at).toBeLessThanOrEqual(Date.now() + 300_000);

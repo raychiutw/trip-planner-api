@@ -1,0 +1,302 @@
+{
+  "schemaVersion": 1,
+  "meta": {
+    "name": "沖繩 3 天自駕範例",
+    "title": "沖繩 3 天自駕範例",
+    "description": "Tripline 的範例行程，示範時間軸編輯、地圖路線、住宿與行前須知。景點座標為真實位置，可直接在地圖頁檢視每日動線。",
+    "countries": "JP",
+    "lang": "zh-TW",
+    "destinations": [
+      {
+        "name": "那霸",
+        "lat": 26.2124,
+        "lng": 127.6809,
+        "dayQuota": 1,
+        "subAreas": ["國際通", "首里"]
+      },
+      {
+        "name": "本部・恩納",
+        "lat": 26.5057,
+        "lng": 127.8506,
+        "dayQuota": 1,
+        "subAreas": ["美麗海", "古宇利島"]
+      },
+      {
+        "name": "中部",
+        "lat": 26.3158,
+        "lng": 127.7597,
+        "dayQuota": 1,
+        "subAreas": ["北谷"]
+      }
+    ]
+  },
+  "days": [
+    {
+      "dayNum": 1,
+      "date": "2026-09-01",
+      "dayOfWeek": "週二",
+      "label": "抵達那霸・市區慢走",
+      "timeline": [
+        {
+          "sortOrder": 1,
+          "startTime": "09:30",
+          "endTime": "10:30",
+          "description": "抵達後在機場租車櫃檯取車，辦手續約 40 分鐘。",
+          "source": "imported",
+          "stopPois": [
+            {
+              "sortOrder": 1,
+              "name": "那霸機場",
+              "type": "transport",
+              "category": "機場",
+              "lat": 26.1958,
+              "lng": 127.6458,
+              "address": "沖縄県那覇市字鏡水150",
+              "note": "國內線航廈一樓出來即是租車接駁站。"
+            }
+          ]
+        },
+        {
+          "sortOrder": 2,
+          "startTime": "11:00",
+          "endTime": "12:00",
+          "description": "沖繩唯一面海的神社，境內可俯瞰波之上海灘。",
+          "source": "imported",
+          "stopPois": [
+            {
+              "sortOrder": 1,
+              "name": "波上宮",
+              "type": "attraction",
+              "category": "神社",
+              "lat": 26.2199,
+              "lng": 127.669,
+              "rating": 4.2,
+              "hours": "境內全日開放",
+              "address": "沖縄県那覇市若狭1-25-11"
+            }
+          ]
+        },
+        {
+          "sortOrder": 3,
+          "startTime": "12:30",
+          "endTime": "15:30",
+          "description": "午餐與伴手禮一次解決，第一牧志公設市場就在旁邊巷內。",
+          "source": "imported",
+          "stopPois": [
+            {
+              "sortOrder": 1,
+              "name": "國際通",
+              "type": "shopping",
+              "category": "商店街",
+              "lat": 26.2146,
+              "lng": 127.689,
+              "rating": 4.1,
+              "hours": "各店約 10:00–22:00",
+              "address": "沖縄県那覇市牧志"
+            },
+            {
+              "sortOrder": 2,
+              "name": "第一牧志公設市場",
+              "type": "restaurant",
+              "category": "市場",
+              "lat": 26.2159,
+              "lng": 127.6889,
+              "rating": 4.0,
+              "price": "$$",
+              "note": "一樓挑海鮮、二樓代客料理。"
+            }
+          ]
+        },
+        {
+          "sortOrder": 4,
+          "startTime": "16:00",
+          "endTime": "17:30",
+          "description": "琉球王國的政治中心，正殿復原工程仍在進行，園區其他區域照常開放。",
+          "source": "imported",
+          "stopPois": [
+            {
+              "sortOrder": 1,
+              "name": "首里城公園",
+              "type": "attraction",
+              "category": "世界遺產",
+              "lat": 26.217,
+              "lng": 127.7196,
+              "rating": 4.3,
+              "hours": "08:30–18:00",
+              "price": "¥400",
+              "address": "沖縄県那覇市首里金城町1-2"
+            }
+          ]
+        }
+      ],
+      "hotel": {
+        "name": "那霸市區飯店（範例）",
+        "type": "hotel",
+        "category": "市區飯店",
+        "lat": 26.2124,
+        "lng": 127.6809,
+        "note": "步行到國際通約 5 分鐘，附設停車場。"
+      }
+    },
+    {
+      "dayNum": 2,
+      "date": "2026-09-02",
+      "dayOfWeek": "週三",
+      "label": "北上本部・海岸線",
+      "timeline": [
+        {
+          "sortOrder": 1,
+          "startTime": "09:00",
+          "endTime": "10:00",
+          "description": "象鼻形狀的隆起珊瑚礁斷崖，順路停留約一小時足夠。",
+          "source": "imported",
+          "stopPois": [
+            {
+              "sortOrder": 1,
+              "name": "萬座毛",
+              "type": "attraction",
+              "category": "海岸景觀",
+              "lat": 26.5057,
+              "lng": 127.8506,
+              "rating": 4.2,
+              "hours": "08:00–19:00",
+              "price": "¥100",
+              "address": "沖縄県国頭郡恩納村恩納2767"
+            }
+          ]
+        },
+        {
+          "sortOrder": 2,
+          "startTime": "11:00",
+          "endTime": "15:00",
+          "description": "黑潮之海大水槽的鯨鯊是招牌，建議抓四小時含午餐。",
+          "source": "imported",
+          "stopPois": [
+            {
+              "sortOrder": 1,
+              "name": "沖繩美麗海水族館",
+              "type": "attraction",
+              "category": "水族館",
+              "lat": 26.6944,
+              "lng": 127.8779,
+              "rating": 4.5,
+              "hours": "08:30–18:30",
+              "price": "¥2180",
+              "address": "沖縄県国頭郡本部町石川424",
+              "reservation": "已訂位",
+              "note": "線上購票可省去現場排隊。"
+            }
+          ]
+        },
+        {
+          "sortOrder": 3,
+          "startTime": "15:45",
+          "endTime": "17:30",
+          "description": "跨海大橋本身就是風景，橋北端有海灘可停留。",
+          "source": "imported",
+          "stopPois": [
+            {
+              "sortOrder": 1,
+              "name": "古宇利大橋",
+              "type": "attraction",
+              "category": "跨海大橋",
+              "lat": 26.6928,
+              "lng": 128.017,
+              "rating": 4.4,
+              "address": "沖縄県国頭郡今帰仁村古宇利"
+            }
+          ]
+        }
+      ],
+      "hotel": {
+        "name": "恩納村海濱度假飯店（範例）",
+        "type": "hotel",
+        "category": "度假飯店",
+        "lat": 26.4979,
+        "lng": 127.8583,
+        "note": "面西，可看夕陽。"
+      }
+    },
+    {
+      "dayNum": 3,
+      "date": "2026-09-03",
+      "dayOfWeek": "週四",
+      "label": "中部購物・返程",
+      "timeline": [
+        {
+          "sortOrder": 1,
+          "startTime": "10:00",
+          "endTime": "13:00",
+          "description": "海濱商圈，摩天輪與日落海灘在同一區，適合離境前最後採買。",
+          "source": "imported",
+          "stopPois": [
+            {
+              "sortOrder": 1,
+              "name": "美國村",
+              "type": "shopping",
+              "category": "商圈",
+              "lat": 26.3158,
+              "lng": 127.7597,
+              "rating": 4.1,
+              "hours": "10:00–22:00",
+              "address": "沖縄県中頭郡北谷町美浜"
+            }
+          ]
+        },
+        {
+          "sortOrder": 2,
+          "startTime": "14:30",
+          "endTime": "15:30",
+          "description": "還車後搭接駁回航廈，建議起飛前三小時抵達。",
+          "source": "imported",
+          "stopPois": [
+            {
+              "sortOrder": 1,
+              "name": "那霸機場",
+              "type": "transport",
+              "category": "機場",
+              "lat": 26.1958,
+              "lng": 127.6458,
+              "address": "沖縄県那覇市字鏡水150",
+              "note": "還車需加滿油，租車公司附近有加油站。"
+            }
+          ]
+        }
+      ],
+      "hotel": null
+    }
+  ],
+  "segments": [
+    { "fromEntryIdx": 0, "toEntryIdx": 1, "mode": "driving", "submode": null, "min": 15, "distanceM": 6200, "source": "manual", "noTravel": null },
+    { "fromEntryIdx": 1, "toEntryIdx": 2, "mode": "walking", "submode": null, "min": 12, "distanceM": 950, "source": "manual", "noTravel": null },
+    { "fromEntryIdx": 2, "toEntryIdx": 3, "mode": "driving", "submode": null, "min": 18, "distanceM": 4800, "source": "manual", "noTravel": null },
+    { "fromEntryIdx": 4, "toEntryIdx": 5, "mode": "driving", "submode": null, "min": 55, "distanceM": 43000, "source": "manual", "noTravel": null },
+    { "fromEntryIdx": 5, "toEntryIdx": 6, "mode": "driving", "submode": null, "min": 35, "distanceM": 24000, "source": "manual", "noTravel": null },
+    { "fromEntryIdx": 7, "toEntryIdx": 8, "mode": "driving", "submode": null, "min": 45, "distanceM": 28000, "source": "manual", "noTravel": null }
+  ],
+  "notes": {
+    "flights": [
+      { "date": "2026-09-01", "flightNo": "範例去程", "route": "桃園 TPE → 那霸 OKA", "depTime": "06:20", "arrTime": "08:55" },
+      { "date": "2026-09-03", "flightNo": "範例回程", "route": "那霸 OKA → 桃園 TPE", "depTime": "18:30", "arrTime": "19:20" }
+    ],
+    "lodgings": [
+      { "name": "那霸市區飯店（範例）", "checkIn": "2026-09-01", "checkOut": "2026-09-02", "note": "含停車位" },
+      { "name": "恩納村海濱度假飯店（範例）", "checkIn": "2026-09-02", "checkOut": "2026-09-03", "note": "面海房型" }
+    ],
+    "reservations": [
+      { "name": "沖繩美麗海水族館", "date": "2026-09-02", "time": "11:00", "note": "線上票，出示 QR code 入場" }
+    ],
+    "pretripNotes": [
+      { "title": "駕照", "content": "日本不承認國際駕照，需備台灣駕照的日文譯本，可在監理站當場申辦。" },
+      { "title": "駕駛方向", "content": "日本靠左行駛，駕駛座在右。出租車場先繞一圈熟悉再上路。" },
+      { "title": "高速公路", "content": "沖繩自動車道採區間計費，租車多附 ETC 卡，還車時一併結清。" },
+      { "title": "颱風季", "content": "8–9 月為颱風好發期，出發前確認航班與景點營業狀態。" }
+    ],
+    "emergencyContacts": [
+      { "name": "日本警察", "phone": "110", "note": "刑事案件、交通事故" },
+      { "name": "日本消防・救護", "phone": "119", "note": "火災與急救共用" },
+      { "name": "台北駐日經濟文化代表處 那霸分處", "phone": "+81-98-862-7008", "note": "護照遺失、緊急協助" },
+      { "name": "旅外國人急難救助專線", "phone": "+886-800-085-095", "note": "自國外撥打回台" }
+    ]
+  }
+}

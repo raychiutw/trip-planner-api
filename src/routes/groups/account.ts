@@ -172,8 +172,8 @@ export function registerAccountRoutes(app: OpenAPIHono<AppEnv>): void {
     docs: { responses: {
       200: { description: '已移除', schema: S.Account_Ok },
       401: E401,
-      403: err('目標是行程擁有者（PERM_DENIED，此檢查先於擁有者身分檢查，所以非擁有者也看得到），或呼叫者不是該行程擁有者／是受限 token（PERM_ADMIN_ONLY／PERM_DENIED）'),
-      404: err('找不到該權限記錄（code: DATA_NOT_FOUND）'),
+      403: err('呼叫者是該行程擁有者，但目標是擁有者列（PERM_DENIED，不可移除擁有者）'),
+      404: err('找不到該權限記錄，**或呼叫者沒有該行程的管理權**（非成員、一般成員、別的行程的擁有者、受限 token），一律同一個 404（DATA_NOT_FOUND），刻意不洩漏 id 是否存在、是不是擁有者列'),
     } },
   });
   legacyRoute(app, {
@@ -182,8 +182,8 @@ export function registerAccountRoutes(app: OpenAPIHono<AppEnv>): void {
       200: { description: '角色沒變回 { ok, unchanged: true }，有變回 { ok, role }', schema: S.Account_PermissionUpdated },
       400: E400('role 不是 member／viewer'),
       401: E401,
-      403: err('目標是行程擁有者（PERM_DENIED，先於擁有者身分檢查），或呼叫者不是該行程擁有者／是受限 token（PERM_ADMIN_ONLY／PERM_DENIED）'),
-      404: err('找不到該權限記錄（code: DATA_NOT_FOUND）'),
+      403: err('呼叫者是該行程擁有者，但目標是擁有者列（PERM_DENIED，不可改擁有者的角色）'),
+      404: err('找不到該權限記錄，**或呼叫者沒有該行程的管理權**（非成員、一般成員、別的行程的擁有者、受限 token），一律同一個 404（DATA_NOT_FOUND），刻意不洩漏 id 是否存在、是不是擁有者列'),
     } },
   });
   legacyRoute(app, {

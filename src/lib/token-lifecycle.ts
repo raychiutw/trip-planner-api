@@ -4,9 +4,13 @@
 import { D1Adapter, type AdapterPayload } from './oauth-d1-adapter';
 import { generateOpaqueToken } from './crypto';
 import { recordAuthEvent } from './auth-audit';
+import { alertSecurityEvent } from './security-events';
 import type { Env } from '../env';
 
-export const ACCESS_TOKEN_TTL_SEC = 60 * 60;
+/** 使用者授權（web／行動端）的 access token：15 分鐘（T9）。外洩的窗口短，靠 refresh 輪替續期。 */
+export const USER_ACCESS_TOKEN_TTL_SEC = 15 * 60;
+/** service（client_credentials）的 access token：1 小時，長時間的自動化流程不必每 15 分鐘重發。 */
+export const SERVICE_ACCESS_TOKEN_TTL_SEC = 60 * 60;
 const REFRESH_TOKEN_TTL_SEC = 30 * 24 * 60 * 60;
 
 export type TokenLifecycleResult =
@@ -62,7 +66,7 @@ async function issueTokenPair(
   const stored = await new D1Adapter(db, source.model).storeIssuedPair(
     source.id,
     { client_id: clientId, user_id: userId, scopes, grantId, ...(dpopJkt ? { cnf: { jkt: dpopJkt } } : {}) },
-    { id: accessToken, expiresIn: ACCESS_TOKEN_TTL_SEC },
+    { id: accessToken, expiresIn: USER_ACCESS_TOKEN_TTL_SEC },
     { id: refreshToken, expiresIn: REFRESH_TOKEN_TTL_SEC },
   );
   if (!stored) return null;
@@ -133,6 +137,7 @@ export async function exchangeAuthorizationCode(
       failureReason: 'auth_code_replay',
       metadata: { grantId: codeRow.grantId ?? null, scopes: codeRow.scopes },
     }, env);
+    await alertSecurityEvent(env, request, { kind: 'token_replay', reason: 'auth_code_replay', clientId });
     return failure('invalid_grant', 'Authorization code already used (replay detected — tokens revoked)');
   }
 
@@ -151,6 +156,7 @@ export async function exchangeAuthorizationCode(
       failureReason: 'auth_code_concurrent_exchange',
       metadata: { scopes: codeRow.scopes },
     }, env);
+    await alertSecurityEvent(env, request, { kind: 'token_replay', reason: 'auth_code_concurrent_exchange', clientId });
     return failure('invalid_grant', 'Authorization code concurrent exchange detected');
   }
   // Won the race — issue tokens + bind grantId for replay-revoke。
@@ -228,6 +234,7 @@ export async function rotateRefreshToken(
       failureReason: 'refresh_token_reuse',
       metadata: { grantId: refreshRow.grantId },
     }, env);
+    await alertSecurityEvent(env, request, { kind: 'token_replay', reason: 'refresh_token_reuse', clientId });
     return failure('invalid_grant', 'refresh_token reuse detected — token family revoked');
   }
 
@@ -247,6 +254,7 @@ export async function rotateRefreshToken(
       failureReason: 'refresh_token_concurrent_rotation',
       metadata: { grantId: refreshRow.grantId },
     }, env);
+    await alertSecurityEvent(env, request, { kind: 'token_replay', reason: 'refresh_token_concurrent_rotation', clientId });
     return failure('invalid_grant', 'refresh_token concurrent rotation detected — token family revoked');
   }
   const tokens = await issueTokenPair(

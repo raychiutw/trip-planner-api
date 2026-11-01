@@ -1,5 +1,6 @@
 /** 舊 handler 轉接層：context 形狀、三種認證模式、錯誤形狀、OpenAPI 登記。走 HTTP 邊界。 */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { z } from '@hono/zod-openapi';
 import { createApp } from '../src/app';
 import { AppError } from '../src/errors';
 import type { Env } from '../src/env';
@@ -24,6 +25,8 @@ function appWith(register: (app: ReturnType<typeof createApp>) => void) {
 }
 const call = (app: ReturnType<typeof createApp>, path: string, headers: Record<string, string> = {}) => app.request(path, { headers }, env);
 const AUTH = { Authorization: 'Bearer tok' };
+
+const NestedErrorDoc = z.object({ error: z.object({ code: z.string(), message: z.string() }) });
 
 describe('legacyRoute', () => {
   it('把 request、env、params、data.auth、functionPath 交給舊 handler', async () => {
@@ -103,5 +106,65 @@ describe('legacyRoute', () => {
     const op = spec.paths['/api/zz/{id}']?.get;
     expect(op?.summary).toBe('範例');
     expect(op?.parameters).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'id', in: 'path' })]));
+  });
+});
+
+describe('legacyRoute 的 OpenAPI 文件（只做文件，不在執行期驗證）', () => {
+  const Body = z.object({ title: z.string(), days: z.number().int() });
+  const Query = z.object({ limit: z.coerce.number().optional(), q: z.string().optional() });
+  const Ok = z.object({ id: z.number(), title: z.string() });
+  type Doc = { paths: Record<string, Record<string, { requestBody?: { content: Record<string, { schema: { properties?: Record<string, unknown> } }> }; parameters?: { name: string; in: string }[]; responses: Record<string, { content?: Record<string, { schema: { properties?: Record<string, unknown> } }> }>; security?: unknown[] }>> };
+  const docOf = async (app: ReturnType<typeof createApp>) => (await (await call(app, '/openapi.json')).json()) as Doc;
+  let received: unknown;
+  const documented = () => appWith((a) => legacyRoute(a, {
+    method: 'post', path: '/api/zz/:id', auth: 'required', summary: '範例',
+    docs: { query: Query, body: Body, responses: { 200: { description: '成功', schema: Ok }, 404: { description: '找不到', schema: NestedErrorDoc } } },
+    handler: (async (c: LegacyContext) => { received = await c.request.json().catch(() => null); return Response.json({ id: 1, title: 't' }); }) as never,
+  }));
+
+  it('請求 body、query、各狀態碼的回應 schema 都寫進 OpenAPI', async () => {
+    const op = (await docOf(documented())).paths['/api/zz/{id}']!.post!;
+    expect(Object.keys(op.requestBody!.content['application/json']!.schema.properties!).sort()).toEqual(['days', 'title']);
+    expect(op.parameters!.map((p) => `${p.in}:${p.name}`).sort()).toEqual(['path:id', 'query:limit', 'query:q']);
+    expect(Object.keys(op.responses).sort()).toEqual(['200', '404']);
+    expect(Object.keys(op.responses['200']!.content!['application/json']!.schema.properties!).sort()).toEqual(['id', 'title']);
+  });
+
+  it('文件不影響執行：body 不符合文件裡的 schema 照樣進 handler（驗證仍由 handler 自己負責）', async () => {
+    received = 'unset';
+    const res = await documented().request('/api/zz/1?limit=abc', { method: 'POST', headers: { ...AUTH, 'content-type': 'application/json' }, body: JSON.stringify({ title: 123, extra: true }) }, env);
+    expect(res.status).toBe(200);
+    expect(received).toEqual({ title: 123, extra: true });
+  });
+
+  it('認證模式反映在文件的 security：required 要 bearer、optional 可有可無、none 沒有', async () => {
+    const mk = (auth: 'required' | 'optional' | 'none', path: string) => (a: ReturnType<typeof createApp>) => legacyRoute(a, { method: 'get', path, auth, handler: (() => Response.json({})) as never });
+    const doc = await docOf(appWith((a) => { mk('required', '/api/zr')(a); mk('optional', '/api/zo')(a); mk('none', '/api/zn')(a); }));
+    expect(doc.paths['/api/zr']!.get!.security).toEqual([{ bearerAuth: [] }]);
+    expect(doc.paths['/api/zo']!.get!.security).toEqual([{ bearerAuth: [] }, {}]);
+    expect(doc.paths['/api/zn']!.get!.security ?? []).toEqual([]);
+  });
+
+  it('body 預設必填；bodyRequired:false 時文件標為選填（handler 自己決定要不要 body 的端點）', async () => {
+    const mk = (path: string, bodyRequired?: boolean) => (a: ReturnType<typeof createApp>) => legacyRoute(a, {
+      method: 'post', path, auth: 'none', handler: (() => Response.json({})) as never,
+      docs: { body: Body, ...(bodyRequired === undefined ? {} : { bodyRequired }) },
+    });
+    const doc = await docOf(appWith((a) => { mk('/api/zb1')(a); mk('/api/zb2', false)(a); mk('/api/zb3', true)(a); }));
+    const required = (p: string) => (doc.paths[p]!.post!.requestBody as { required?: boolean }).required;
+    expect(required('/api/zb1')).toBe(true);
+    expect(required('/api/zb2')).toBe(false);
+    expect(required('/api/zb3')).toBe(true);
+  });
+
+  it('沒有提供 docs 時維持原本的預設文件（200 任意內容）', async () => {
+    const doc = await docOf(appWith((a) => legacyRoute(a, { method: 'get', path: '/api/zd', auth: 'none', handler: (() => Response.json({})) as never })));
+    expect(Object.keys(doc.paths['/api/zd']!.get!.responses)).toEqual(['200']);
+  });
+
+  it('執行期行為不變：認證、錯誤形狀、waitUntil（既有測試之外再確認一次）', async () => {
+    expect((await call(documented(), '/api/zz/1')).status).toBe(404); // POST 才有；GET 沒登記
+    const res = await documented().request('/api/zz/1', { method: 'POST' }, env);
+    expect(res.status).toBe(401);
   });
 });

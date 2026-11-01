@@ -106,11 +106,12 @@ describe('一律 401 AUTH_REQUIRED（回應形狀相同，不洩漏失敗原因�
     await expect401(await get('/priv/me', 'Bearer bad2'));
   });
   it('過長 token（>512 字元）在查 DB 前就拒絕', async () => {
-    let queried = 0;
-    const spy = { prepare: () => { queried++; throw new Error('不該查 DB'); } } as unknown as D1Database;
+    const sqls: string[] = [];
+    const spy = { prepare: (sql: string) => { sqls.push(sql); throw new Error('DB 不可用'); } } as unknown as D1Database;
     const res = await appWithRoutes().request('/priv/me', { headers: { Authorization: `Bearer ${'a'.repeat(513)}` } }, { DB: spy } as Env);
     await expect401(res);
-    expect(queried).toBe(0);
+    // 不會拿這個 token 去查 token／使用者表（稽核與限流的寫入是另一回事，且失敗不影響回應）
+    expect(sqls.filter((q) => /oauth_models|FROM users/i.test(q))).toEqual([]);
   });
   it('DB 查詢拋錯 → 401（fail-closed，不放行、不 500 洩漏）', async () => {
     const broken = { prepare: () => { throw new Error('D1_ERROR boom'); } } as unknown as D1Database;

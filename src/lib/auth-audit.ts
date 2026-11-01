@@ -61,7 +61,11 @@ export type AuthEventType =
   | 'oauth_consent'
   | 'token_issue'
   | 'token_revoke'
-  | 'rate_limited';
+  | 'rate_limited'
+  | 'auth_failure'
+  | 'permission_denied'
+  | 'token_replay'
+  | 'signature_error';
 
 export type AuthEventOutcome = 'success' | 'failure';
 

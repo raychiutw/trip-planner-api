@@ -160,7 +160,7 @@ describe('authorization_code + PKCE', () => {
     const res = await post(codeBody());
     expect(res.status).toBe(200);
     const body = await res.json() as J;
-    expect(body).toMatchObject({ token_type: 'Bearer', expires_in: 3600, scope: 'openid profile' });
+    expect(body).toMatchObject({ token_type: 'Bearer', expires_in: 900, scope: 'openid profile' });
     expect(body.access_token).not.toBe(body.refresh_token);
     expect(JSON.parse(rows('AccessToken')[0]!.payload)).toMatchObject({ client_id: 'web', user_id: 'u1', scopes: ['openid', 'profile'] });
     expect(JSON.parse(rows('AuthorizationCode')[0]!.payload).consumed).toBeTruthy();

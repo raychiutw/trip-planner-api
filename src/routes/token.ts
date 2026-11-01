@@ -12,6 +12,7 @@ import { buildRateLimitResponse, oauthErrorResponse } from '../errors';
 import { recordAuthEvent } from '../lib/auth-audit';
 import { generateOpaqueToken } from '../lib/crypto';
 import { readDpopHeader, verifyDpopProof } from '../lib/dpop';
+import { issueIdToken } from './handlers/oauth/_id_token';
 import { D1Adapter } from '../lib/oauth-d1-adapter';
 import { parseAllowedScopes, readBodyText } from '../lib/oauth-request';
 import { verifyPassword } from '../lib/password';
@@ -151,12 +152,22 @@ export function registerTokenRoute(app: Hono<AppEnv>): void {
       ? await rotateRefreshToken(c.env, request, clientId, body, { dpopJkt })
       : await exchangeAuthorizationCode(c.env, request, clientId, body, { requirePkce: client.client_type === 'public', dpopJkt });
     if (!result.ok) return oauthError(result.error, result.description);
+
+    // OIDC id_token：scope 含 openid 且有設定簽章 key 才簽；簽不出來（沒設 key、key 壞掉、使用者不見）
+    // 不能讓整個 token 請求失敗——access／refresh token 已經發出，client 沒有 id_token 仍可運作。
+    let idToken: string | null = null;
+    try {
+      idToken = await issueIdToken(c.env, request, clientId, result.userId, result.scopes);
+    } catch {
+      idToken = null;
+    }
     return tokenJson({
       access_token: result.tokens.access_token,
       refresh_token: result.tokens.refresh_token,
       token_type: dpopJkt ? 'DPoP' : 'Bearer',
       expires_in: ACCESS_TOKEN_TTL_SEC,
       scope: result.scopes.join(' '),
+      ...(idToken ? { id_token: idToken } : {}),
     });
   });
 }

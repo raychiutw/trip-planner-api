@@ -12,7 +12,8 @@
  *   approve 時再驗一次 client（仍啟用、redirect_uri 仍已註冊），避免授權請求建立後 client 被停用或改註冊。
  * - Consent 沿用舊 consent.ts：key = `${user}:${client}`、TTL 1 年、儲存驗過的 scopes。
  */
-import { AppError } from '../../../errors';
+import { AppError, oauthErrorResponse } from '../../../errors';
+import { MOBILE_GATE_MESSAGE, mobileClientAllowed } from '../../../lib/mobile-oauth';
 import { recordAuthEvent } from '../../../lib/auth-audit';
 import { D1Adapter } from '../../../lib/oauth-d1-adapter';
 import { validateAuthorizeRequest, type ClientAppRow } from '../../../lib/oauth-server/validate-authorize-request';
@@ -93,6 +94,11 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
   const taken = await takeOnce(DB, 'AuthRequest', params.id ?? '');
   if (!taken || !isAuthRequest(taken)) throw invalidRequest();
   const req = taken;
+
+  // mobile client 的環境閘門（取代舊 consent 的同一段）：在別的環境建立的 request 不能在這裡同意或拒絕
+  if (!mobileClientAllowed(context.env, context.request, req.client_id, req.redirect_uri)) {
+    return oauthErrorResponse('unauthorized_client', MOBILE_GATE_MESSAGE, 400);
+  }
 
   const validated = revalidate(req, await loadClient(DB, req.client_id));
   if (!validated) throw invalidRequest(); // client 已停用或 redirect_uri 不再已註冊：不導向任何地方

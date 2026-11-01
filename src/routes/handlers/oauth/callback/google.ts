@@ -12,6 +12,13 @@
  *   5. 產生我們的 authorization code → 302 redirect_uri?code=&state=。
  *      第一方 client 的 code 沿用 routes/login.ts 的形狀：redirect_uri=null、可帶 dpop_jkt、60 秒有效。
  *   Google 回 error（例如使用者取消）：state 有效時 302 回 client 帶 error=access_denied，否則同樣視為 state 錯誤。
+ *
+ * 帳號刪除重新驗證分支（state 帶 `reauth`，由 login/google?purpose=account-delete 建立；自舊入口移植）：
+ *   取得 id_token claims 後驗證 nonce、auth_time 夠新（不早於開始時間、不在未來、不超過 5 分鐘），
+ *   並以唯讀查詢確認 Google sub 對應到同一個帳號。**不建 user／identity、不更新 last_used_at、不發 authorization code**，
+ *   只把 mobile challenge 由 started 轉 verified，302 回 mobile callback（?challenge_id=…&status=verified）。
+ *   任何失敗（含使用者取消、換 token 失敗）：challenge started→failed，302 回 ?challenge_id=…&status=failed；
+ *   沒有可用 challenge 時回 JSON 403 ACCOUNT_DELETE_REAUTH_REQUIRED。
  */
 import { D1Adapter } from '../../../../lib/oauth-d1-adapter';
 import { verifyGoogleIdToken } from '../../../../lib/oauth-client/google-id-token';
@@ -20,6 +27,10 @@ import { buildClientRedirect, takeOnce } from '../../../../lib/oauth-single-use'
 import { generateOpaqueToken, getPublicOrigin } from '../../../../lib/utils';
 import type { Env } from '../../../../env';
 import { notConfigured } from '../login/google';
+import { mobileOAuthContract } from '../../../../lib/mobile-oauth';
+import {
+  DELETE_PROOF_TTL_MS, readMobileDeleteChallenge, transitionMobileDeleteChallenge,
+} from '../../../../lib/delete-reauth';
 
 const CODE_TTL_SEC = 10 * 60;
 const FIRST_PARTY_CODE_TTL_SEC = 60;
@@ -44,6 +55,8 @@ interface GoogleLoginStatePayload {
   google_code_verifier?: string;
   first_party?: boolean;
   dpop_jkt?: string;
+  created_at?: number;
+  reauth?: { uid: string; challengeId: string; grantId: string; clientId: string };
 }
 
 function errorResponse(code: string, message: string, status = 400): Response {
@@ -80,6 +93,87 @@ async function recoverIdentityRace(db: D1Database, sub: string, err: unknown): P
   return winner.user_id;
 }
 
+/** 帳號刪除重新驗證的 callback（見檔頭）。所有失敗一律走 reauthFailure，成功只轉 challenge 狀態。 */
+async function finishDeleteReauth(
+  context: Parameters<PagesFunction<Env>>[0],
+  row: GoogleLoginStatePayload,
+  code: string | null,
+  providerError: string | null,
+  googleClientId: string,
+  googleClientSecret: string,
+): Promise<Response> {
+  const reauth = row.reauth!;
+  const db = context.env.DB;
+  const contract = mobileOAuthContract(context.env, context.request);
+  const reauthFailure = async (message: string, status = 403): Promise<Response> => {
+    if (reauth.clientId === contract?.clientId) {
+      await transitionMobileDeleteChallenge(db, reauth.challengeId, reauth.uid, reauth.grantId, 'started', 'failed');
+      const redirect = new URL(row.redirect_uri!);
+      redirect.searchParams.set('challenge_id', reauth.challengeId);
+      redirect.searchParams.set('status', 'failed');
+      return new Response(null, { status: 302, headers: { Location: redirect.toString(), 'cache-control': 'no-store' } });
+    }
+    return errorResponse('ACCOUNT_DELETE_REAUTH_REQUIRED', message, status);
+  };
+
+  if (providerError) return reauthFailure('Google 驗證未完成');
+  if (!code) return reauthFailure('缺少授權碼');
+
+  let tokenRes: Response;
+  try {
+    tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code,
+        client_id: googleClientId,
+        client_secret: googleClientSecret,
+        redirect_uri: `${getPublicOrigin(context.env, context.request)}/api/oauth/callback/google`,
+        grant_type: 'authorization_code',
+        code_verifier: row.google_code_verifier!,
+      }),
+    });
+  } catch {
+    return reauthFailure('Google 驗證暫時無法完成', 502);
+  }
+  if (!tokenRes.ok) return reauthFailure('Google 驗證失敗', 502);
+  let tokenJson: GoogleTokenResponse;
+  try { tokenJson = (await tokenRes.json()) as GoogleTokenResponse; } catch { return reauthFailure('Google 憑證無效', 502); }
+
+  let claims;
+  try {
+    claims = await verifyGoogleIdToken(tokenJson.id_token, googleClientId);
+  } catch {
+    return reauthFailure('Google 憑證無效', 401);
+  }
+  if (claims['nonce'] !== row.nonce) return reauthFailure('Google 憑證無效', 401);
+  const sub = claims.sub;
+  if (!sub || typeof claims.email !== 'string' || !claims.email) return reauthFailure('Google 憑證缺少身分資訊');
+
+  const authTime = claims['auth_time'];
+  const startedAt = row.created_at ?? 0;
+  if (typeof authTime !== 'number' || !Number.isFinite(authTime) ||
+      authTime * 1000 < startedAt - 5000 || authTime * 1000 > Date.now() + 5000 ||
+      Date.now() - authTime * 1000 > DELETE_PROOF_TTL_MS) {
+    return reauthFailure('請重新驗證身分');
+  }
+  const identity = await db.prepare('SELECT user_id FROM auth_identities WHERE provider = ? AND provider_user_id = ?')
+    .bind('google', sub).first<{ user_id: string }>();
+  if (identity?.user_id !== reauth.uid) return reauthFailure('驗證帳號不符');
+
+  if (reauth.clientId !== contract?.clientId) return reauthFailure('請重新驗證身分');
+  const challenge = await readMobileDeleteChallenge(db, reauth.challengeId);
+  if (!challenge || challenge.uid !== identity.user_id || challenge.grantId !== reauth.grantId ||
+      challenge.clientId !== reauth.clientId || challenge.expired ||
+      !(await transitionMobileDeleteChallenge(db, reauth.challengeId, identity.user_id, challenge.grantId, 'started', 'verified'))) {
+    return reauthFailure('請重新驗證身分');
+  }
+  const redirect = new URL(row.redirect_uri!);
+  redirect.searchParams.set('challenge_id', reauth.challengeId);
+  redirect.searchParams.set('status', 'verified');
+  return new Response(null, { status: 302, headers: { Location: redirect.toString(), 'cache-control': 'no-store' } });
+}
+
 export const onRequestGet: PagesFunction<Env> = async (context) => {
   const url = new URL(context.request.url);
   const code = url.searchParams.get('code');
@@ -99,6 +193,8 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
   ) {
     return invalidState();
   }
+
+  if (row.reauth) return finishDeleteReauth(context, row, code, url.searchParams.get('error'), clientId, clientSecret);
 
   // Google 端失敗（使用者取消等）：導回 client（redirect_uri 是 login 時驗過的）
   if (url.searchParams.get('error') || !code) {

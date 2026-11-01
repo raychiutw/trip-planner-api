@@ -6,6 +6,7 @@ import * as S from '../../schemas/account';
 import { onRequestGet as accountAiAuthorizationGet, onRequestPost as accountAiAuthorizationPost } from '../handlers/account/ai-authorization';
 import { onRequestGet as accountConnectedAppsGet } from '../handlers/account/connected-apps';
 import { onRequestDelete as accountConnectedAppsClientIdDelete } from '../handlers/account/connected-apps/@client_id';
+import { onRequestPost as accountDeleteReauthPost, onRequestGet as accountDeleteReauthGet, onRequestDelete as accountDeleteReauthDelete } from '../handlers/account/delete-reauth';
 import { onRequestGet as accountIndexGet, onRequestDelete as accountIndexDelete } from '../handlers/account/index';
 import { onRequestGet as accountNotificationsGet, onRequestPatch as accountNotificationsPatch } from '../handlers/account/notifications';
 import { onRequestPatch as accountProfilePatch } from '../handlers/account/profile';
@@ -65,7 +66,7 @@ export function registerAccountRoutes(app: OpenAPIHono<AppEnv>): void {
   });
   legacyRoute(app, {
     method: 'get', path: '/api/account', auth: 'required', handler: accountIndexGet, summary: '帳號刪除預覽',
-    docs: { responses: { 200: { description: '刪除前的影響預覽（確認對話框用）', schema: S.Account_DeletePreview }, 401: E401, 403: E403_ACCOUNT } },
+    docs: { responses: { 200: { description: '刪除前的影響預覽（確認對話框用；含無密碼帳號可用的 reauthProvider）', schema: S.Account_DeletePreview }, 401: E401, 403: E403_ACCOUNT } },
   });
   legacyRoute(app, {
     method: 'delete', path: '/api/account', auth: 'required', handler: accountIndexDelete, summary: '刪除帳號（不可逆）',
@@ -73,11 +74,41 @@ export function registerAccountRoutes(app: OpenAPIHono<AppEnv>): void {
       body: S.Account_DeleteBody,
       responses: {
         200: { description: '帳號與所擁有的行程（含共編者的）已抹除；所有 token／授權一併清除', schema: S.Account_DeleteResult },
-        400: err('沒帶二次確認：有密碼的帳號沒給 password，或純 OAuth 帳號的 confirm 不是 "DELETE"（code: ACCOUNT_DELETE_CONFIRM_REQUIRED）'),
+        400: err('沒帶二次確認：有密碼的帳號沒給 password，或無密碼帳號的 confirm 不是 "DELETE"（code: ACCOUNT_DELETE_CONFIRM_REQUIRED）'),
         401: err('未登入（AUTH_REQUIRED），或密碼錯誤且資料未動（ACCOUNT_DELETE_PASSWORD_INVALID）'),
-        403: E403_ACCOUNT,
+        403: err('token 屬於非第一方 client 或受限 token（PERM_DENIED）；或無密碼帳號沒有「verified、同帳號、同 grant、未過期、與環境相符 client」的 challenge（ACCOUNT_DELETE_REAUTH_REQUIRED，fail-closed，資料未動）'),
       },
     },
+  });
+  const E403_MOBILE = err('不是與環境相符的 mobile client 簽發、綁 grant 的 user token（PERM_DENIED）');
+  legacyRoute(app, {
+    method: 'post', path: '/api/account/delete-reauth', auth: 'required', handler: accountDeleteReauthPost, summary: '建立帳號刪除的 Google 重新驗證 challenge',
+    docs: { responses: {
+      200: { description: '已建立 challenge（5 分鐘有效，Cache-Control: no-store）。用瀏覽器開 authorizeUrl 完成 Google 驗證後，callback 會 302 回 mobile callback ?challenge_id=…&status=verified（失敗為 status=failed）', schema: S.Account_DeleteReauthStarted },
+      401: E401,
+      403: err('不是與環境相符的 mobile client 簽發、綁 grant 的 user token（PERM_DENIED）；或此帳號沒有 Google 身分（ACCOUNT_DELETE_REAUTH_REQUIRED）'),
+      500: err('MOBILE_OAUTH_CALLBACK_URL 未設定、無效，或與環境契約不符（SERVER_MISCONFIG）'),
+    } },
+  });
+  legacyRoute(app, {
+    method: 'get', path: '/api/account/delete-reauth', auth: 'required', handler: accountDeleteReauthGet, summary: '查 challenge 狀態',
+    docs: { query: S.Account_DeleteReauthQuery, responses: {
+      200: { description: 'challenge 狀態（Cache-Control: no-store）；過期為 expired', schema: S.Account_DeleteReauthStatus },
+      400: E400('沒帶 challenge_id'),
+      401: E401, 403: E403_MOBILE,
+      404: err('challenge 不存在，或不屬於這個使用者／grant／client；一律同一個回應（DATA_NOT_FOUND）'),
+    } },
+  });
+  legacyRoute(app, {
+    method: 'delete', path: '/api/account/delete-reauth', auth: 'required', handler: accountDeleteReauthDelete, summary: '取消 challenge',
+    docs: { query: S.Account_DeleteReauthQuery, responses: {
+      200: { description: 'pending／started／verified 轉為 cancelled；cancelled 重複取消維持 cancelled；failed 冪等維持 failed', schema: S.Account_DeleteReauthCancelled },
+      400: E400('沒帶 challenge_id'),
+      401: E401,
+      403: err('不是 mobile client 的 token（PERM_DENIED）；或 challenge 已過期（ACCOUNT_DELETE_REAUTH_REQUIRED）'),
+      404: err('challenge 不存在，或不屬於這個使用者／grant／client（DATA_NOT_FOUND）'),
+      409: err('challenge 已 used（已用來刪帳號），或取消時狀態剛被並行請求改變（DATA_CONFLICT）'),
+    } },
   });
   legacyRoute(app, {
     method: 'get', path: '/api/account/notifications', auth: 'required', handler: accountNotificationsGet, summary: '通知偏好',

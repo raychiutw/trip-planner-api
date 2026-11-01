@@ -19,7 +19,7 @@ export function registerOpenApiDocs(app: OpenAPIHono<AppEnv>): void {
     request: { body: { required: true, content: { 'application/x-www-form-urlencoded': { schema: TokenRequest }, 'application/json': { schema: TokenRequest } } } },
     responses: {
       200: { description: 'Token 簽發成功（帶 DPoP 時 token_type 為 DPoP）', content: json(TokenResponse) },
-      400: { description: 'invalid_request／invalid_grant／invalid_scope／unsupported_grant_type／invalid_dpop_proof', content: json(OAuthError) },
+      400: { description: 'invalid_request／invalid_grant／invalid_scope／unsupported_grant_type／invalid_dpop_proof；mobile client（tripline-mobile／-uat／-dev）與環境不符，或 authorization_code 的 redirect_uri 不是該環境的精確 callback（invalid_client，任何 grant 都檢查）', content: json(OAuthError) },
       401: { description: 'invalid_client／unauthorized_client', content: json(OAuthError) },
       429: { description: 'rate_limited（附 Retry-After）', content: json(OAuthError) },
     },

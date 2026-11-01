@@ -185,6 +185,28 @@ describe('authorize／authorize requests', () => {
   });
 });
 
+describe('mobile client 環境閘門的錯誤形狀', () => {
+  it('approve／deny：環境不符 → 400 unauthorized_client（OAuth 扁平形狀，符合文件的 union）；authorize 同形狀', async () => {
+    for (const verb of ['approve', 'deny']) {
+      const id = `${P}mobile-${verb}`;
+      await new D1Adapter(db, 'AuthRequest').upsert(id, {
+        client_id: 'tripline-mobile', redirect_uri: 'https://mobile-callback.trip-planner-dby.pages.dev/oauth/callback', scopes: ['openid'],
+        state: null, code_challenge: PKCE.code_challenge, code_challenge_method: 'S256', prompt: null,
+      }, 600);
+      const res = track(`POST ${verb}`, await api.request('POST', `/api/oauth/authorize/requests/${id}/${verb}`, { as: `${P}user@test.com` })); // api 沒有 ENVIRONMENT → 沒有 mobile 契約
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expectContract(OauthMisc_OAuthError, body);
+      expect(body).toMatchObject({ error: 'unauthorized_client' });
+    }
+    const authz = track('GET authorize', await api.get(`/api/oauth/authorize?${new URLSearchParams({ response_type: 'code', client_id: 'tripline-mobile', redirect_uri: 'https://mobile-callback.trip-planner-dby.pages.dev/oauth/callback', ...PKCE })}`));
+    expect(authz.status).toBe(400);
+    const authzBody = await authz.json();
+    expectContract(OauthMisc_OAuthError, authzBody);
+    expect(authzBody).toMatchObject({ error: 'unauthorized_client' });
+  });
+});
+
 describe('client-info', () => {
   it('200／400／404', async () => {
     const ok = track('GET client-info', await api.get(`/api/oauth/client-info?client_id=${sent(OauthMisc_ClientInfoQuery, { client_id: CLIENT }).client_id}`));
@@ -331,13 +353,52 @@ describe('login/google／callback/google', () => {
     const r400b = track('GET login', await start({ dpop_jkt: 'short' }));
     expect(r400b.status).toBe(400); await errBody(r400b, OauthMisc_OAuthError);
 
+    // client_id／redirect_uri／code_challenge 在文件上是「一般登入必填」（purpose=account-delete 時不需要），
+    // 所以 schema 標為選填、description 寫明條件；handler 的實際要求由下面的 400 驗證。
     const noRedirect = { client_id: CLIENT, ...PKCE };
-    docRejects(OauthMisc_LoginGoogleQuery, noRedirect);
+    const spec = (await (await createApp().request('/openapi.json', {}, mockEnv(db))).json()) as { paths: Record<string, { get: { parameters: Array<{ name: string; required?: boolean; description?: string }> } }> };
+    const params = spec.paths['/api/oauth/login/google']!.get.parameters;
+    for (const k of ['client_id', 'redirect_uri', 'code_challenge']) {
+      const p = params.find((x) => x.name === k)!;
+      expect(p.required, `${k} 是條件必填，不能標必填`).toBeFalsy();
+      expect(p.description, `${k} 的文件要寫明一般登入必填`).toMatch(/一般登入必填/);
+    }
     const r400c = track('GET login', await createApi({ env: mockEnv(db, configured as never) }).get(`/api/oauth/login/google?${new URLSearchParams(noRedirect)}`));
     expect(r400c.status).toBe(400); await errBody(r400c, OauthMisc_OAuthError);
 
     const r503 = track('GET login', await start({}, {}));
     expect(r503.status).toBe(503); await errBody(r503);
+  });
+
+  it('purpose=account-delete：沒帶 challenge → 403 ACCOUNT_DELETE_REAUTH_REQUIRED（ApiError 形狀）；有 challenge → 302 帶 reauth 專用的 Google 參數', async () => {
+    const env = { ...configured, ENVIRONMENT: 'production', MOBILE_OAUTH_CALLBACK_URL: 'https://mobile-callback.trip-planner-dby.pages.dev/oauth/callback' };
+    const mobileApi = createApi({ env: mockEnv(db, env as never) });
+    const noChallenge = track('GET login', await mobileApi.get(`https://x.com/api/oauth/login/google?${new URLSearchParams(sent(OauthMisc_LoginGoogleQuery, { purpose: 'account-delete' }))}`));
+    expect(noChallenge.status).toBe(403);
+    await errBody(noChallenge);
+
+    await db.prepare("INSERT INTO users (id, email, display_name) VALUES (?, ?, 'R')").bind(`${P}rea-u`, `${P}rea@example.com`).run();
+    const cid = await (await import('../../src/lib/delete-reauth')).createMobileDeleteChallenge(db, `${P}rea-u`, `${P}rea-grant`, 'tripline-mobile');
+    const ok = track('GET login', await mobileApi.get(`https://x.com/api/oauth/login/google?${new URLSearchParams(sent(OauthMisc_LoginGoogleQuery, { purpose: 'account-delete', challenge: cid }))}`));
+    expect(ok.status).toBe(302);
+    const loc = new URL(ok.headers.get('Location')!);
+    expect([...loc.searchParams.keys()].sort()).toEqual(['claims', 'client_id', 'code_challenge', 'code_challenge_method', 'max_age', 'nonce', 'prompt', 'redirect_uri', 'response_type', 'scope', 'state']);
+    expect(loc.searchParams.get('max_age')).toBe('0');
+
+    // callback：Google 取消 → 302 回 mobile callback（status=failed）；沒有 mobile 契約的環境 → 403 JSON
+    const state = loc.searchParams.get('state')!;
+    const denied = track('GET callback', await createApi({ env: mockEnv(db, env as never) }).get(`https://x.com/api/oauth/callback/google?error=access_denied&state=${state}`));
+    expect(denied.status).toBe(302);
+    expect(denied.headers.get('Location')).toBe(`${env.MOBILE_OAUTH_CALLBACK_URL}?challenge_id=${cid}&status=failed`);
+    const orphan = `${P}state-reauth-orphan`;
+    await new D1Adapter(db, 'GoogleLoginState').upsert(orphan, {
+      provider: 'google', client_id: 'tripline-mobile', redirect_uri: env.MOBILE_OAUTH_CALLBACK_URL, scopes: [], client_state: null,
+      nonce: 'n', google_code_verifier: 'gv', first_party: false, created_at: Date.now(),
+      reauth: { uid: `${P}rea-u`, challengeId: cid, grantId: `${P}rea-grant`, clientId: 'tripline-mobile' },
+    }, 300);
+    const noContract = track('GET callback', await callback(orphan, configured, 'error=access_denied')); // configured 沒有 ENVIRONMENT → 沒有 mobile 契約
+    expect(noContract.status).toBe(403);
+    await errBody(noContract);
   });
 
   const VERIFIER = 'v'.repeat(43);

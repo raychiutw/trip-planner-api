@@ -3,6 +3,15 @@ main = "src/index.ts"
 compatibility_date = "2024-12-01"
 compatibility_flags = ["nodejs_compat"]
 
+# staging（頂層）的非機密設定。機密（SESSION_SECRET、OAUTH_SIGNING_PRIVATE_KEY…）不放這裡，由 secrets 管理。
+# ENVIRONMENT=preview 是 src/lib/mobile-oauth.ts 的 UAT 契約：只認 tripline-mobile-uat、請求 origin 必須等於 PUBLIC_ORIGIN、
+# callback 必須是 /uat/oauth/callback（與 tripline-mobile 的 production callback 分開，避免 staging 與 production 的 app link 互相搶）。
+# ⚠ 合併後由 deploy.yml 部署到 staging：PUBLIC_ORIGIN 會改變 issuer、授權導向的 web origin（WEB_ORIGIN 未設時）與信件連結的 origin。
+[vars]
+ENVIRONMENT = "preview"
+PUBLIC_ORIGIN = "https://trip-planner-api.lean-lean.workers.dev"
+MOBILE_OAUTH_CALLBACK_URL = "https://mobile-callback.trip-planner-dby.pages.dev/uat/oauth/callback"
+
 # 骨架階段（T7）先綁 staging D1，只給 /api/health 做 SELECT 1。
 # 正式資料庫與 migration 的歸屬由 T15 處理，切換前不綁 production。
 [[d1_databases]]
@@ -23,6 +32,8 @@ ENVIRONMENT = "production"
 PUBLIC_ORIGIN = "https://trip-planner-api-production.lean-lean.workers.dev"
 WEB_ORIGIN = "https://trip-planner-dby.pages.dev"
 ALLOWED_ORIGINS = "https://trip-planner-dby.pages.dev"
+# 帳號刪除的 Google 重新驗證完成後導回的 mobile app link（須與 src/lib/mobile-oauth.ts 的 production 契約一致）
+MOBILE_OAUTH_CALLBACK_URL = "https://mobile-callback.trip-planner-dby.pages.dev/oauth/callback"
 
 [[env.production.d1_databases]]
 binding = "DB"

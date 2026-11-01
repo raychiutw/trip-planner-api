@@ -68,6 +68,7 @@ export const ErrorCode = {
   // 帳號刪除（不可逆，需二次確認）
   ACCOUNT_DELETE_CONFIRM_REQUIRED: 'ACCOUNT_DELETE_CONFIRM_REQUIRED',
   ACCOUNT_DELETE_PASSWORD_INVALID: 'ACCOUNT_DELETE_PASSWORD_INVALID',
+  ACCOUNT_DELETE_REAUTH_REQUIRED: 'ACCOUNT_DELETE_REAUTH_REQUIRED',
   SIGNUP_CONSENT_REQUIRED: 'SIGNUP_CONSENT_REQUIRED',
   NOTES_AI_INVALID_OUTPUT: 'NOTES_AI_INVALID_OUTPUT',
   NOTES_AI_NO_VALID_ITEMS: 'NOTES_AI_NO_VALID_ITEMS',
@@ -126,6 +127,7 @@ export const ERROR_MESSAGES: Record<ErrorCodeType, string> = {
   RESET_RATE_LIMITED: '密碼重設嘗試過多，請稍後再試',
   ACCOUNT_DELETE_CONFIRM_REQUIRED: '刪除帳號需要二次確認',
   ACCOUNT_DELETE_PASSWORD_INVALID: '密碼不正確，帳號未刪除',
+  ACCOUNT_DELETE_REAUTH_REQUIRED: '請重新驗證身分後再刪除帳號',
   SIGNUP_CONSENT_REQUIRED: '請先閱讀並同意個資條款',
   NOTES_AI_INVALID_OUTPUT: 'AI 回傳格式不正確，未變更原有內容',
   NOTES_AI_NO_VALID_ITEMS: 'AI 沒有回傳可用項目，未變更原有內容',
@@ -158,6 +160,8 @@ export interface AuthData {
   scopes?: string[];
   /** OAuth client_id from V2 Bearer token. Only present for service token. */
   clientId?: string;
+  /** 這張 access token 所屬的 OAuth grant（帳號刪除的 mobile challenge 綁定它）。舊 token 可能沒有。 */
+  grantId?: string;
   /**
    * Trip-scoped token restriction (v2.55.56, tp-request downscope). When set, the
    * token may ONLY read/write this one trip — hasWritePermission / requireTripReadAccess

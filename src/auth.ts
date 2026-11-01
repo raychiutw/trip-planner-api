@@ -43,6 +43,7 @@ async function resolveToken(db: D1Database, token: string, firstPartyOverride?: 
   const scopes = Array.isArray(row.scopes) ? row.scopes.filter((s): s is string => typeof s === 'string') : [];
   const restrictTrip = typeof row.restrict_trip === 'string' ? row.restrict_trip : undefined;
   const isFirstPartyClient = isFirstPartyClientId(clientId, firstPartyOverride);
+  const grantId = typeof row.grantId === 'string' ? row.grantId : undefined;
   const cnf = row.cnf as { jkt?: unknown } | undefined;
   const boundJkt = typeof cnf?.jkt === 'string' ? cnf.jkt : null;
 
@@ -55,7 +56,7 @@ async function resolveToken(db: D1Database, token: string, firstPartyOverride?: 
   const user = await db.prepare('SELECT email, status FROM users WHERE id = ?').bind(row.user_id).first<{ email: string; status: string }>();
   // 使用者不存在或被停權 → 拒絕（舊入口是 best-effort 放行；新入口 fail-closed）
   if (!user || user.status !== 'active') return null;
-  return { auth: { email: user.email.trim().toLowerCase(), userId: row.user_id, isServiceToken: false, scopes, clientId, isFirstPartyClient, restrictTrip }, boundJkt };
+  return { auth: { email: user.email.trim().toLowerCase(), userId: row.user_id, isServiceToken: false, scopes, clientId, grantId, isFirstPartyClient, restrictTrip }, boundJkt };
 }
 
 export const bearerAuth: MiddlewareHandler<AppEnv> = async (c, next) => {

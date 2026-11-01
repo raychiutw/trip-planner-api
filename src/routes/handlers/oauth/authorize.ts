@@ -15,6 +15,7 @@ import { validateAuthorizeRequest, type ClientAppRow } from '../../../lib/oauth-
 import { buildClientRedirect } from '../../../lib/oauth-single-use';
 import { generateOpaqueToken } from '../../../lib/utils';
 import { oauthErrorResponse } from '../../../errors';
+import { MOBILE_GATE_MESSAGE, isMobileClientId, mobileClientAllowed } from '../../../lib/mobile-oauth';
 import type { Env } from '../../../env';
 
 export const AUTH_REQUEST_TTL_SEC = 10 * 60;
@@ -55,6 +56,11 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     code_challenge_method: params.get('code_challenge_method') ?? undefined,
     prompt: params.get('prompt') ?? undefined,
   };
+
+  // mobile client 的環境閘門（自舊入口移植）：client 與 redirect_uri 必須與環境契約精確相符，否則不可導回 client → 400
+  if (isMobileClientId(req.client_id ?? '') && !mobileClientAllowed(context.env, context.request, req.client_id!, req.redirect_uri ?? null)) {
+    return oauthErrorResponse('unauthorized_client', MOBILE_GATE_MESSAGE, 400);
+  }
 
   let client: ClientAppRow | null = null;
   if (req.client_id) {

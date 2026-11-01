@@ -21,7 +21,7 @@ import { serviceToken } from '../baseline/service-token';
 import { assertGoogleAvailable } from '../../src/lib/maps-lock';
 import { AppError } from '../../src/errors';
 import { ApiError } from '../../src/schemas/common';
-import { expectContract } from './support';
+import { contractIssues, expectContract } from './support';
 import * as S from '../../src/schemas/trips-core';
 
 const OWNER = 'tc-owner@test.com';
@@ -58,6 +58,10 @@ async function check(
   hits.add(`${method} ${template} ${expected}`);
   return body;
 }
+/** 測試實際送出的 body 也必須符合文件的 body schema（handler 接受 ⇒ 文件也要判定合法）。 */
+const good = <T>(schema: z.ZodTypeAny, body: T): T => { expectContract(schema, body); return body; };
+/** 對照：handler 實際拒絕的 body，文件的 body schema 也要判定不合法。 */
+const bad = <T>(schema: z.ZodTypeAny, body: T): T => { expect(contractIssues(schema, body), '文件 schema 應判定此 body 不合法').not.toEqual([]); return body; };
 const err = (m: string, t: string, p: string, status: number, options?: Parameters<Api['request']>[2], client?: Api) =>
   check(m, t, p, status, ApiError, options, client);
 
@@ -112,19 +116,19 @@ describe('POST /api/trips', () => {
   it('201：建立行程（含 destinations）', async () => {
     const body = await check('POST', '/api/trips', '/api/trips', 201, S.Trips_CreateResult, {
       as: OWNER,
-      json: {
+      json: good(S.Trips_CreateBody, {
         name: '契約測試行程', startDate: '2026-05-01', endDate: '2026-05-03', title: 't', description: 'd', countries: 'JP',
         published: false, data_source: 'manual', lang: 'zh-TW',
         destinations: [{ name: '那霸', lat: 26.2, lng: 127.6, day_quota: 2, sub_areas: ['國際通'] }],
-      },
+      }),
     }) as { daysCreated: number; destinationsCreated: number };
     expect(body.daysCreated).toBe(3);
     expect(body.destinationsCreated).toBe(1);
   });
   it('400：帶了 id（伺服器產生）／缺必填／日期錯誤', async () => {
-    await err('POST', '/api/trips', '/api/trips', 400, { as: OWNER, json: { id: 'x', name: 'n', startDate: '2026-05-01', endDate: '2026-05-02' } });
-    await err('POST', '/api/trips', '/api/trips', 400, { as: OWNER, json: { name: 'n' } });
-    await err('POST', '/api/trips', '/api/trips', 400, { as: OWNER, json: { name: 'n', startDate: '2026-05-05', endDate: '2026-05-01' } });
+    await err('POST', '/api/trips', '/api/trips', 400, { as: OWNER, json: bad(S.Trips_CreateBody, { id: 'x', name: 'n', startDate: '2026-05-01', endDate: '2026-05-02' }) });
+    await err('POST', '/api/trips', '/api/trips', 400, { as: OWNER, json: bad(S.Trips_CreateBody, { name: 'n' }) });
+    await err('POST', '/api/trips', '/api/trips', 400, { as: OWNER, json: bad(S.Trips_CreateBody, { name: 123, startDate: '2026-05-05', endDate: '2026-05-01' }) });
   });
   it('401：未登入', () => err('POST', '/api/trips', '/api/trips', 401, { json: { name: 'n', startDate: '2026-05-01', endDate: '2026-05-02' } }));
   it('403：受限 token 不可建立行程', () =>
@@ -134,7 +138,7 @@ describe('POST /api/trips', () => {
 describe('POST /api/trips/import', () => {
   const file = {
     schemaVersion: 1,
-    meta: { name: '匯入行程', title: '匯入', lang: 'zh-TW', countries: 'JP', destinations: [{ name: '那霸', lat: 26.2, lng: 127.6, dayQuota: 1, subAreas: ['a'] }] },
+    meta: { name: '匯入行程', title: '匯入', description: '匯入說明', lang: 'zh-TW', countries: 'JP', destinations: [{ name: '那霸', lat: 26.2, lng: 127.6, dayQuota: 1, subAreas: ['a'] }] },
     days: [{ dayNum: 1, date: '2026-06-01', dayOfWeek: '一', label: 'D1', timeline: [
       { sortOrder: 1, startTime: '10:00', stopPois: [{ name: '首里城', type: 'attraction', lat: 26.2, lng: 127.7 }] },
       { sortOrder: 2, startTime: '12:00', stopPois: [{ name: '午餐', type: 'restaurant' }] },
@@ -143,13 +147,13 @@ describe('POST /api/trips/import', () => {
     notes: { flights: [{ airline: 'X', flightNo: '1' }] },
   };
   it('201：匯入成功', async () => {
-    const body = await check('POST', '/api/trips/import', '/api/trips/import', 201, S.Trips_ImportResult, { as: OWNER, json: file }) as { daysCreated: number };
+    const body = await check('POST', '/api/trips/import', '/api/trips/import', 201, S.Trips_ImportResult, { as: OWNER, json: good(S.Trips_ImportBody, file) }) as { daysCreated: number };
     expect(body.daysCreated).toBe(1);
   });
   it('400：版本不對／缺名稱／含不允許的鍵', async () => {
-    await err('POST', '/api/trips/import', '/api/trips/import', 400, { as: OWNER, json: { ...file, schemaVersion: 2 } });
+    await err('POST', '/api/trips/import', '/api/trips/import', 400, { as: OWNER, json: bad(S.Trips_ImportBody, { ...file, schemaVersion: 2 }) });
     await err('POST', '/api/trips/import', '/api/trips/import', 400, { as: OWNER, json: { schemaVersion: 1, meta: {}, days: [] } });
-    await err('POST', '/api/trips/import', '/api/trips/import', 400, { as: OWNER, json: { ...file, weather: {} } });
+    await err('POST', '/api/trips/import', '/api/trips/import', 400, { as: OWNER, json: bad(S.Trips_ImportBody, { ...file, weather: {} }) });
   });
   it('400：原文超過 512KB', () =>
     err('POST', '/api/trips/import', '/api/trips/import', 400, { as: OWNER, json: { ...file, notes: { pad: 'x'.repeat(520 * 1024) } } }));
@@ -176,11 +180,11 @@ describe('GET /api/trips/:id（optional 認證）', () => {
 describe('PUT /api/trips/:id', () => {
   const p = `/api/trips/${PRIV}`;
   it('200：更新欄位與 destinations', async () => {
-    await check('PUT', '/api/trips/{id}', p, 200, S.Trips_Ok, { as: OWNER, json: { title: '新標題', published: 0, lang: 'ja', destinations: [{ name: '石垣', sub_areas: ['a'] }] } });
+    await check('PUT', '/api/trips/{id}', p, 200, S.Trips_Ok, { as: OWNER, json: good(S.Trips_UpdateBody, { name: '改名', title: '新標題', description: '新說明', countries: 'JP', published: 0, data_source: 'manual', lang: 'ja', destinations: [{ name: '石垣', lat: 24.3, lng: 124.1, day_quota: 1, sub_areas: ['a'] }] }) });
   });
   it('400：無有效欄位／lang 不合法', async () => {
-    await err('PUT', '/api/trips/{id}', p, 400, { as: OWNER, json: { bogus: 1 } });
-    await err('PUT', '/api/trips/{id}', p, 400, { as: OWNER, json: { lang: 'fr' } });
+    await err('PUT', '/api/trips/{id}', p, 400, { as: OWNER, json: bad(S.Trips_UpdateBody, { bogus: 1 }) });
+    await err('PUT', '/api/trips/{id}', p, 400, { as: OWNER, json: bad(S.Trips_UpdateBody, { lang: 'fr' }) });
   });
   it('401：未登入', () => err('PUT', '/api/trips/{id}', p, 401, { json: { title: 'x' } }));
   it('403：非成員', () => err('PUT', '/api/trips/{id}', p, 403, { as: STRANGER, json: { title: 'x' } }));
@@ -277,8 +281,10 @@ describe('GET／POST /api/trips/:id/health-check', () => {
     const created = await check('POST', t, `/api/trips/${PUB}/health-check`, 202, S.Trips_HealthCheckTriggerResult, { as: OWNER }) as { report: { status: string } };
     expect(created.report.status).toBe('pending');
     await check('POST', t, `/api/trips/${PUB}/health-check`, 200, S.Trips_HealthCheckTriggerResult, { as: OWNER });
-    await db.prepare("UPDATE trip_health_reports SET findings_json = ? WHERE trip_id = ?").bind(JSON.stringify([{ severity: 'high', dimension: 'timing', title: 't', description: 'd', action_target: { day: 1, entry_id: e1 } }]), PUB).run();
-    const got = await check('GET', t, `/api/trips/${PUB}/health-check`, 200, S.Trips_HealthCheckResult, { as: OWNER }) as { report: { findings: Array<Record<string, unknown>> } };
+    await db.prepare("UPDATE trip_health_reports SET findings_json = ?, status = 'completed', completed_at = datetime('now') WHERE trip_id = ?").bind(JSON.stringify([{ severity: 'high', dimension: 'timing', title: 't', description: 'd', action_target: { day: 1, entry_id: e1 } }]), PUB).run();
+    const got = await check('GET', t, `/api/trips/${PUB}/health-check`, 200, S.Trips_HealthCheckResult, { as: OWNER }) as { report: { status: string; completedAt: string | null; findings: Array<Record<string, unknown>> } };
+    expect(got.report.status).toBe('completed');
+    expect(typeof got.report.completedAt).toBe('string');
     expect(got.report.findings[0]!.actionTarget).toEqual({ day: 1, entryId: e1 });
   });
   it('401：未登入', async () => {
@@ -309,20 +315,20 @@ describe('交通段 segments', () => {
   let sid: number;
 
   it('POST 201：driving 自動計算', async () => {
-    const body = await check('POST', lt, `/api/trips/${PUB}/segments`, 201, S.Trips_Segment, { as: OWNER, json: { from_entry_id: e1, to_entry_id: e2, mode: 'driving' } }) as { id: number; min: number };
+    const body = await check('POST', lt, `/api/trips/${PUB}/segments`, 201, S.Trips_Segment, { as: OWNER, json: good(S.Trips_SegmentCreateBody, { from_entry_id: e1, to_entry_id: e2, mode: 'driving' }) }) as { id: number; min: number };
     sid = body.id;
     expect(body.min).toBe(10);
   });
   it('POST 201：transit 手填 min、noTravel 標記', async () => {
-    const t = await check('POST', lt, `/api/trips/${PUB}/segments`, 201, S.Trips_Segment, { as: OWNER, json: { from_entry_id: e2, to_entry_id: e1, mode: 'transit', submode: 'bus', min: 15 } }) as { source: string };
+    const t = await check('POST', lt, `/api/trips/${PUB}/segments`, 201, S.Trips_Segment, { as: OWNER, json: good(S.Trips_SegmentCreateBody, { from_entry_id: e2, to_entry_id: e1, mode: 'transit', submode: 'bus', min: 15 }) }) as { source: string };
     expect(t.source).toBe('manual');
-    const n = await check('POST', lt, `/api/trips/${PUB}/segments`, 201, S.Trips_Segment, { as: OWNER, json: { from_entry_id: e2, to_entry_id: e1, noTravel: true } }) as { noTravel: number };
+    const n = await check('POST', lt, `/api/trips/${PUB}/segments`, 201, S.Trips_Segment, { as: OWNER, json: good(S.Trips_SegmentCreateBody, { from_entry_id: e2, to_entry_id: e1, noTravel: true }) }) as { noTravel: number };
     expect(n.noTravel).toBe(1);
   });
   it('POST 400：缺 mode／entry 相同／min 超界', async () => {
     await err('POST', lt, `/api/trips/${PUB}/segments`, 400, { as: OWNER, json: { from_entry_id: e1, to_entry_id: e2 } });
     await err('POST', lt, `/api/trips/${PUB}/segments`, 400, { as: OWNER, json: { from_entry_id: e1, to_entry_id: e1, mode: 'driving' } });
-    await err('POST', lt, `/api/trips/${PUB}/segments`, 400, { as: OWNER, json: { from_entry_id: e1, to_entry_id: e2, mode: 'transit', min: 99999 } });
+    await err('POST', lt, `/api/trips/${PUB}/segments`, 400, { as: OWNER, json: bad(S.Trips_SegmentCreateBody, { from_entry_id: e1, to_entry_id: e2, mode: 'transit', min: 99999 }) });
   });
   it('POST 401／403／404', async () => {
     await err('POST', lt, `/api/trips/${PUB}/segments`, 401, { json: { from_entry_id: e1, to_entry_id: e2, mode: 'driving' } });
@@ -344,18 +350,18 @@ describe('交通段 segments', () => {
 
   it('PATCH 200：改 mode；noTravel；版本相符', async () => {
     const p = `/api/trips/${PUB}/segments/${sid}`;
-    const a = await check('PATCH', st, p, 200, S.Trips_Segment, { as: OWNER, json: { mode: 'walking' } }) as { mode: string; version: number };
+    const a = await check('PATCH', st, p, 200, S.Trips_Segment, { as: OWNER, json: good(S.Trips_SegmentPatchBody, { mode: 'walking', submode: null }) }) as { mode: string; version: number };
     expect(a.mode).toBe('walking');
-    await check('PATCH', st, p, 200, S.Trips_Segment, { as: OWNER, json: { mode: 'driving', expectedVersion: a.version } });
-    await check('PATCH', st, p, 200, S.Trips_Segment, { as: OWNER, json: { noTravel: true } });
+    await check('PATCH', st, p, 200, S.Trips_Segment, { as: OWNER, json: good(S.Trips_SegmentPatchBody, { mode: 'driving', expectedVersion: a.version }) });
+    await check('PATCH', st, p, 200, S.Trips_Segment, { as: OWNER, json: good(S.Trips_SegmentPatchBody, { noTravel: true }) });
   });
   it('PATCH 400／401／403／404／409', async () => {
     const p = `/api/trips/${PUB}/segments/${sid}`;
-    await err('PATCH', st, p, 400, { as: OWNER, json: { mode: 'bogus' } });
+    await err('PATCH', st, p, 400, { as: OWNER, json: bad(S.Trips_SegmentPatchBody, { mode: 'bogus' }) });
     await err('PATCH', st, p, 401, { json: { mode: 'walking' } });
     await err('PATCH', st, p, 403, { as: STRANGER, json: { mode: 'walking' } });
     await err('PATCH', st, `/api/trips/${PUB}/segments/999999`, 404, { as: OWNER, json: { mode: 'walking' } });
-    await err('PATCH', st, p, 409, { as: OWNER, json: { mode: 'walking', expectedVersion: 99999 } });
+    await err('PATCH', st, p, 409, { as: OWNER, json: good(S.Trips_SegmentPatchBody, { mode: 'walking', expectedVersion: 99999 }) });
   });
 });
 

@@ -20,10 +20,11 @@ import { sha256Base64Url } from '../../src/lib/crypto';
 import { createApp } from '../../src/app';
 import { ApiError } from '../../src/schemas/common';
 import {
-  OauthMisc_AuthRequestInfo, OauthMisc_ClientInfo, OauthMisc_JwkSet, OauthMisc_OAuthError,
+  OauthMisc_AuthRequestInfo, OauthMisc_AuthorizeQuery, OauthMisc_CallbackGoogleQuery, OauthMisc_ClientInfo, OauthMisc_ClientInfoQuery,
+  OauthMisc_DownscopeBody, OauthMisc_LoginGoogleQuery, OauthMisc_MintRestrictedBody, OauthMisc_RevokeBody, OauthMisc_JwkSet, OauthMisc_OAuthError,
   OauthMisc_OpenIdConfiguration, OauthMisc_RedirectTo, OauthMisc_RestrictedToken, OauthMisc_UserInfo,
 } from '../../src/schemas/oauth-misc';
-import { expectContract } from './support';
+import { contractIssues, expectContract } from './support';
 import type { Env } from '../../src/env';
 
 const P = 'ct-om-';
@@ -47,6 +48,9 @@ const hit = new Set<string>();
 const track = (key: string, res: Response) => { hit.add(`${key} ${res.status}`); return res; };
 
 const errBody = async (res: Response, schema: typeof ApiError | typeof OauthMisc_OAuthError = ApiError) => expectContract(schema, await res.json());
+/** 測試實際送出的 query／body 必須符合文件 schema；「被 handler 拒絕」的對照則文件 schema 也必須判為不合法。 */
+const sent = <T>(schema: Parameters<typeof expectContract>[0], value: T): T => { expectContract(schema, value); return value; };
+const docRejects = (schema: Parameters<typeof expectContract>[0], value: unknown) => expect(contractIssues(schema, value)).not.toEqual([]);
 const json = async (res: Response) => res.json();
 
 beforeAll(async () => {
@@ -105,7 +109,7 @@ describe('jwks／openid-configuration', () => {
 });
 
 describe('authorize／authorize requests', () => {
-  const authorize = (params: Record<string, string>) => api.get(`/api/oauth/authorize?${new URLSearchParams(params)}`);
+  const authorize = (params: Record<string, string>) => api.get(`/api/oauth/authorize?${new URLSearchParams(sent(OauthMisc_AuthorizeQuery, params))}`);
   const VALID = { client_id: CLIENT, redirect_uri: CB, response_type: 'code', scope: 'openid profile', state: 'st-1', ...PKCE };
 
   it('GET authorize：302 到 web 授權頁，Location 帶 request_id', async () => {
@@ -115,6 +119,11 @@ describe('authorize／authorize requests', () => {
     expect(loc.origin + loc.pathname).toBe(`${WEB}/oauth/authorize`);
     expect([...loc.searchParams.keys()]).toEqual(['request_id']);
     expect(loc.searchParams.get('request_id')).toMatch(/\S+/);
+  });
+
+  it('GET authorize：帶 prompt 也是 302（prompt 欄位型別）', async () => {
+    const res = track('GET authorize', await authorize({ ...VALID, prompt: 'consent' }));
+    expect(res.status).toBe(302);
   });
 
   it('GET authorize：可導回 client 的錯誤 → 302 redirect_uri?error=&error_description=&state=', async () => {
@@ -178,12 +187,17 @@ describe('authorize／authorize requests', () => {
 
 describe('client-info', () => {
   it('200／400／404', async () => {
-    const ok = track('GET client-info', await api.get(`/api/oauth/client-info?client_id=${CLIENT}`));
+    const ok = track('GET client-info', await api.get(`/api/oauth/client-info?client_id=${sent(OauthMisc_ClientInfoQuery, { client_id: CLIENT }).client_id}`));
     expect(ok.status).toBe(200);
     expectContract(OauthMisc_ClientInfo, await json(ok));
+    docRejects(OauthMisc_ClientInfoQuery, {});
+    await db.prepare("UPDATE client_apps SET app_logo_url = 'https://web.example/logo.png' WHERE client_id = ?").bind(CLIENT).run();
+    const withLogo = (await (await api.get(`/api/oauth/client-info?client_id=${CLIENT}`)).json()) as Record<string, unknown>;
+    expect(withLogo.app_logo_url).toBe('https://web.example/logo.png');
+    expectContract(OauthMisc_ClientInfo, withLogo);
     const r400 = track('GET client-info', await api.get('/api/oauth/client-info'));
     expect(r400.status).toBe(400); await errBody(r400);
-    const r404 = track('GET client-info', await api.get(`/api/oauth/client-info?client_id=${P}unknown`));
+    const r404 = track('GET client-info', await api.get(`/api/oauth/client-info?${new URLSearchParams(sent(OauthMisc_ClientInfoQuery, { client_id: `${P}unknown` }))}`));
     expect(r404.status).toBe(404); await errBody(r404);
   });
 });
@@ -191,14 +205,16 @@ describe('client-info', () => {
 describe('downscope／mint-restricted', () => {
   it('POST downscope：200／400／401／403', async () => {
     const K = 'POST downscope';
-    const ok = track(K, await api.request('POST', '/api/oauth/downscope', { as: OWNER, json: { trip_id: TRIP } }));
+    const ok = track(K, await api.request('POST', '/api/oauth/downscope', { as: OWNER, json: sent(OauthMisc_DownscopeBody, { trip_id: TRIP }) }));
     expect(ok.status).toBe(200);
     expectContract(OauthMisc_RestrictedToken, await json(ok));
+    docRejects(OauthMisc_DownscopeBody, {});
+    docRejects(OauthMisc_DownscopeBody, { trip_id: 5 });
     const r400 = track(K, await api.request('POST', '/api/oauth/downscope', { as: OWNER, json: {} }));
     expect(r400.status).toBe(400); await errBody(r400);
-    const r401 = track(K, await api.request('POST', '/api/oauth/downscope', { json: { trip_id: TRIP } }));
+    const r401 = track(K, await api.request('POST', '/api/oauth/downscope', { json: sent(OauthMisc_DownscopeBody, { trip_id: TRIP }) }));
     expect(r401.status).toBe(401); await errBody(r401);
-    const r403 = track(K, await api.request('POST', '/api/oauth/downscope', { as: `${P}outsider@test.com`, json: { trip_id: TRIP } }));
+    const r403 = track(K, await api.request('POST', '/api/oauth/downscope', { as: `${P}outsider@test.com`, json: sent(OauthMisc_DownscopeBody, { trip_id: TRIP }) }));
     expect(r403.status).toBe(403); await errBody(r403);
   });
 
@@ -208,8 +224,8 @@ describe('downscope／mint-restricted', () => {
     requestIds.push(row!.id);
     return row!.id;
   }
-  const mint = (body: unknown, auth: string | null = `Bearer ${SECRET}`) =>
-    api.request('POST', '/api/oauth/mint-restricted', { json: body, ...(auth ? { headers: { Authorization: auth } } : {}) });
+  const mint = (body: Record<string, unknown>, auth: string | null = `Bearer ${SECRET}`) =>
+    api.request('POST', '/api/oauth/mint-restricted', { json: Object.keys(body).length ? sent(OauthMisc_MintRestrictedBody, body) : body, ...(auth ? { headers: { Authorization: auth } } : {}) });
 
   it('POST mint-restricted：200／400／401／403／404', async () => {
     const K = 'POST mint-restricted';
@@ -218,6 +234,9 @@ describe('downscope／mint-restricted', () => {
     expect(ok.status).toBe(200);
     expectContract(OauthMisc_RestrictedToken, await json(ok));
 
+    docRejects(OauthMisc_MintRestrictedBody, {});
+    const strMint = await mint({ request_id: String(await seedRequest('open')) });
+    expect(strMint.status).toBe(200);
     const r400 = track(K, await mint({}));
     expect(r400.status).toBe(400); await errBody(r400);
     const r401 = track(K, await mint({ request_id: 1 }, null));
@@ -233,23 +252,25 @@ describe('revoke', () => {
   const revoke = (fields: Record<string, string>) => api.fetch(new Request('https://x.com/api/oauth/revoke', {
     method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(fields).toString(),
   }));
+  const revokeSent = (fields: Record<string, string>) => revoke(sent(OauthMisc_RevokeBody, fields));
 
   it('200 空內容／400／401', async () => {
     const K = 'POST revoke';
     const tok = `${P}rev-${crypto.randomUUID()}`;
     await new D1Adapter(db, 'AccessToken').upsert(tok, { client_id: CLIENT, user_id: 'u', scopes: ['openid'], grantId: `g-${tok}` }, 300);
-    const ok = track(K, await revoke({ token: tok, client_id: CLIENT }));
+    const ok = track(K, await revokeSent({ token: tok, client_id: CLIENT }));
     expect(ok.status).toBe(200);
     expect(await ok.text()).toBe('');
+    docRejects(OauthMisc_RevokeBody, { client_id: CLIENT });
     const r400 = track(K, await revoke({ client_id: CLIENT }));
     expect(r400.status).toBe(400); await errBody(r400, OauthMisc_OAuthError);
-    const r401 = track(K, await revoke({ token: 'x', client_id: CONF, client_secret: 'wrong' }));
+    const r401 = track(K, await revokeSent({ token: 'x', client_id: CONF, client_secret: 'wrong' }));
     expect(r401.status).toBe(401); await errBody(r401, OauthMisc_OAuthError);
   });
 
   it('429 扁平錯誤並帶 Retry-After（放最後：會用掉這個 IP 的額度，結束後清掉）', async () => {
     let last: Response | undefined;
-    for (let i = 0; i < 52 && last?.status !== 429; i++) last = await revoke({ token: 'x', client_id: CLIENT });
+    for (let i = 0; i < 52 && last?.status !== 429; i++) last = await revokeSent({ token: 'x', client_id: CLIENT });
     track('POST revoke', last!);
     expect(last!.status).toBe(429);
     expect(last!.headers.get('Retry-After')).toBeTruthy();
@@ -273,6 +294,10 @@ describe('logout／userinfo', () => {
     const ok = track(K, await api.request('GET', '/api/oauth/userinfo', { as: `${P}ui@test.com` }));
     expect(ok.status).toBe(200);
     expectContract(OauthMisc_UserInfo, await json(ok));
+    await db.prepare("UPDATE users SET avatar_url = 'https://web.example/a.png' WHERE id = ?").bind(userIdFor(`${P}ui@test.com`)).run();
+    const withAvatar = (await (await api.request('GET', '/api/oauth/userinfo', { as: `${P}ui@test.com` })).json()) as Record<string, unknown>;
+    expect(withAvatar.avatarUrl).toBe('https://web.example/a.png');
+    expectContract(OauthMisc_UserInfo, withAvatar);
     const r401 = track(K, await api.request('GET', '/api/oauth/userinfo'));
     expect(r401.status).toBe(401); await errBody(r401);
     const svc = track(K, await api.request('GET', '/api/oauth/userinfo', { bearer: await noUserToken('ui') }));
@@ -282,7 +307,7 @@ describe('logout／userinfo', () => {
 
 describe('login/google／callback/google', () => {
   const start = (params: Record<string, string> = {}, env: Record<string, string> = configured) =>
-    createApi({ env: mockEnv(db, env as never) }).get(`/api/oauth/login/google?${new URLSearchParams({ client_id: CLIENT, redirect_uri: CB, state: 'cs', ...PKCE, ...params })}`);
+    createApi({ env: mockEnv(db, env as never) }).get(`/api/oauth/login/google?${new URLSearchParams(sent(OauthMisc_LoginGoogleQuery, { client_id: CLIENT, redirect_uri: CB, state: 'cs', ...PKCE, ...params }))}`);
 
   it('GET login/google：302 導向 Google，query 形狀', async () => {
     const res = track('GET login', await start());
@@ -306,6 +331,11 @@ describe('login/google／callback/google', () => {
     const r400b = track('GET login', await start({ dpop_jkt: 'short' }));
     expect(r400b.status).toBe(400); await errBody(r400b, OauthMisc_OAuthError);
 
+    const noRedirect = { client_id: CLIENT, ...PKCE };
+    docRejects(OauthMisc_LoginGoogleQuery, noRedirect);
+    const r400c = track('GET login', await createApi({ env: mockEnv(db, configured as never) }).get(`/api/oauth/login/google?${new URLSearchParams(noRedirect)}`));
+    expect(r400c.status).toBe(400); await errBody(r400c, OauthMisc_OAuthError);
+
     const r503 = track('GET login', await start({}, {}));
     expect(r503.status).toBe(503); await errBody(r503);
   });
@@ -327,7 +357,7 @@ describe('login/google／callback/google', () => {
   };
   const googleOk = (claims: object) => vi.spyOn(global, 'fetch').mockResolvedValue(new Response(JSON.stringify({ access_token: 'a', id_token: idToken(claims), expires_in: 3600, token_type: 'Bearer' })));
   const callback = (state: string, env: Record<string, string> = configured, extra = 'code=gc') =>
-    createApi({ env: mockEnv(db, env as never) }).get(`/api/oauth/callback/google?${extra}&state=${state}`);
+    createApi({ env: mockEnv(db, env as never) }).get(`/api/oauth/callback/google?${new URLSearchParams(sent(OauthMisc_CallbackGoogleQuery, Object.fromEntries(new URLSearchParams(`${extra}&state=${state}`))))}`);
   const K = 'GET callback';
 
   it('302 成功：redirect_uri?code=&state=', async () => {
@@ -349,6 +379,9 @@ describe('login/google／callback/google', () => {
   });
 
   it('400 state 無效／email 未驗證、401 nonce 不符、403 停用、409 衝突、502 換 token 失敗、503 未設定', async () => {
+    docRejects(OauthMisc_CallbackGoogleQuery, { code: 'gc' });
+    const missingState = track(K, await createApi({ env: mockEnv(db, configured as never) }).get('/api/oauth/callback/google?code=gc'));
+    expect(missingState.status).toBe(400); await errBody(missingState);
     const r400 = track(K, await callback(`${P}state-missing`));
     expect(r400.status).toBe(400); await errBody(r400);
 

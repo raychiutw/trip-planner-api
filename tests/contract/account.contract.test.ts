@@ -62,6 +62,14 @@ async function hit(route: string, method: string, path: string, opts: RequestOpt
   return res;
 }
 
+/** 送出前先用文件的 body schema 驗證：測試送的 body 必須是「文件認為合法」的。 */
+function valid<T>(schema: Parameters<typeof expectContract>[0], body: T): T { expectContract(schema, body); return body; }
+/** handler 實際拒絕的 body，文件的 body schema 也必須判定不合法（文件與 handler 的規則一致）。 */
+function invalid<T>(schema: Parameters<typeof expectContract>[0], body: T): T {
+  expect(schema.safeParse(body).success, `文件的 schema 應判定不合法：${JSON.stringify(body)}`).toBe(false);
+  return body;
+}
+
 async function expectApiError(res: Response, status: number, code?: string): Promise<void> {
   expect(res.status).toBe(status);
   const body = await res.json();
@@ -210,8 +218,8 @@ describe('/api/account（刪除預覽／刪除）', () => {
     // 純 OAuth 帳號
     const oauth = await sessionFor(db, 'acct-del-oauth@test.com');
     await expectApiError(await hit('/api/account', 'delete', '/api/account', { bearer: oauth.bearer, json: {} }), 400, 'ACCOUNT_DELETE_CONFIRM_REQUIRED');
-    await expectApiError(await hit('/api/account', 'delete', '/api/account', { bearer: oauth.bearer, json: { confirm: 'delete' } }), 400, 'ACCOUNT_DELETE_CONFIRM_REQUIRED');
-    const ok = await hit('/api/account', 'delete', '/api/account', { bearer: oauth.bearer, json: { confirm: 'DELETE' } });
+    await expectApiError(await hit('/api/account', 'delete', '/api/account', { bearer: oauth.bearer, json: invalid(S.Account_DeleteBody, { confirm: 'delete' }) }), 400, 'ACCOUNT_DELETE_CONFIRM_REQUIRED');
+    const ok = await hit('/api/account', 'delete', '/api/account', { bearer: oauth.bearer, json: valid(S.Account_DeleteBody, { confirm: 'DELETE' }) });
     expect(ok.status).toBe(200);
     const okBody = await ok.json();
     expectContract(S.Account_DeleteResult, okBody);
@@ -226,9 +234,11 @@ describe('/api/account（刪除預覽／刪除）', () => {
     ).bind(pw.userId, 'acct-del-pw@test.com', await hashPassword('correct-horse-1')).run();
     const preview = await api.get('/api/account', { bearer: pw.bearer });
     expect(((await preview.json()) as { hasPassword: boolean }).hasPassword).toBe(true);
+    // 有密碼帳號：缺 password、password 不是字串 → handler 400；password 不是字串時文件的 schema 也判定不合法
     await expectApiError(await hit('/api/account', 'delete', '/api/account', { bearer: pw.bearer, json: {} }), 400, 'ACCOUNT_DELETE_CONFIRM_REQUIRED');
+    await expectApiError(await hit('/api/account', 'delete', '/api/account', { bearer: pw.bearer, json: invalid(S.Account_DeleteBody, { password: 123 }) }), 400, 'ACCOUNT_DELETE_CONFIRM_REQUIRED');
     await expectApiError(await hit('/api/account', 'delete', '/api/account', { bearer: pw.bearer, json: { password: 'wrong' } }), 401, 'ACCOUNT_DELETE_PASSWORD_INVALID');
-    const ok2 = await hit('/api/account', 'delete', '/api/account', { bearer: pw.bearer, json: { password: 'correct-horse-1' } });
+    const ok2 = await hit('/api/account', 'delete', '/api/account', { bearer: pw.bearer, json: valid(S.Account_DeleteBody, { password: 'correct-horse-1' }) });
     expect(ok2.status).toBe(200);
     expectContract(S.Account_DeleteResult, await ok2.json());
   });
@@ -252,7 +262,7 @@ describe('/api/account/notifications', () => {
     expectContract(S.Account_NotificationPreferencesResponse, gb);
     expect(gb).toEqual({ preferences: { tripUpdates: true, invitations: true, system: true, updatedAt: null } });
 
-    const p = await hit('/api/account/notifications', 'patch', '/api/account/notifications', { bearer: s.bearer, json: { system: false } });
+    const p = await hit('/api/account/notifications', 'patch', '/api/account/notifications', { bearer: s.bearer, json: valid(S.Account_NotificationPatchBody, { system: false }) });
     expect(p.status).toBe(200);
     const pb = await p.json();
     expectContract(S.Account_NotificationPreferencesResponse, pb);
@@ -260,7 +270,7 @@ describe('/api/account/notifications', () => {
     expect(typeof (pb as { preferences: { updatedAt: string } }).preferences.updatedAt).toBe('string');
   });
   it('PATCH 400：未知欄位／非 boolean／空物件', async () => {
-    for (const json of [{ bogus: true }, { system: 'yes' }, {}]) {
+    for (const json of [{ bogus: true }, invalid(S.Account_NotificationPatchBody, { system: 'yes' })]) {
       await expectApiError(await hit('/api/account/notifications', 'patch', '/api/account/notifications', { bearer: ownerBearer, json }), 400, 'DATA_VALIDATION');
     }
   });
@@ -277,18 +287,18 @@ describe('/api/account/notifications', () => {
 describe('PATCH /api/account/profile', () => {
   it('→ 200 回 userinfo 形狀；null 清除', async () => {
     const s = await sessionFor(db, 'acct-profile@test.com');
-    const res = await hit('/api/account/profile', 'patch', '/api/account/profile', { bearer: s.bearer, json: { displayName: '  小明  ' } });
+    const res = await hit('/api/account/profile', 'patch', '/api/account/profile', { bearer: s.bearer, json: valid(S.Account_ProfilePatchBody, { displayName: '  小明  ' }) });
     expect(res.status).toBe(200);
     const body = await res.json();
     expectContract(S.Account_Profile, body);
     expect((body as { displayName: string }).displayName).toBe('小明');
-    const cleared = await api.request('PATCH', '/api/account/profile', { bearer: s.bearer, json: { displayName: null } });
+    const cleared = await api.request('PATCH', '/api/account/profile', { bearer: s.bearer, json: valid(S.Account_ProfilePatchBody, { displayName: null }) });
     const cb = await cleared.json();
     expectContract(S.Account_Profile, cb);
     expect((cb as { displayName: unknown }).displayName).toBeNull();
   });
   it('400：空物件／型別錯／超過 50 字', async () => {
-    for (const json of [{}, { displayName: 5 }, { displayName: 'x'.repeat(51) }]) {
+    for (const json of [{}, invalid(S.Account_ProfilePatchBody, { displayName: 5 }), invalid(S.Account_ProfilePatchBody, { displayName: 'x'.repeat(51) })]) {
       await expectApiError(await hit('/api/account/profile', 'patch', '/api/account/profile', { bearer: ownerBearer, json }), 400, 'DATA_VALIDATION');
     }
   });
@@ -378,14 +388,14 @@ describe('/api/dev/apps', () => {
 
   it('POST → 201：public 沒有 secret；confidential 有 secret（只出現一次）', async () => {
     const bearer = await dev();
-    const pub = await hit('/api/dev/apps', 'post', '/api/dev/apps', { bearer, json: { app_name: 'Pub App', redirect_uris: ['https://pub.example.com/cb'] } });
+    const pub = await hit('/api/dev/apps', 'post', '/api/dev/apps', { bearer, json: valid(S.Account_DevAppCreateBody, { app_name: 'Pub App', redirect_uris: ['https://pub.example.com/cb'] }) });
     expect(pub.status).toBe(201);
     const pubBody = await pub.json() as { client_id: string; client_secret: string | null };
     expectContract(S.Account_DevAppCreated, pubBody);
     expect(pubBody.client_secret).toBeNull();
     publicId = pubBody.client_id;
 
-    const conf = await api.request('POST', '/api/dev/apps', { bearer, json: { app_name: 'Secret App', client_type: 'confidential', redirect_uris: ['http://localhost:3000/cb'], allowed_scopes: ['openid'], homepage_url: 'https://x.example.com', app_description: 'd' } });
+    const conf = await api.request('POST', '/api/dev/apps', { bearer, json: valid(S.Account_DevAppCreateBody, { app_name: 'Secret App', client_type: 'confidential', redirect_uris: ['http://localhost:3000/cb'], allowed_scopes: ['openid'], homepage_url: 'https://x.example.com', app_description: 'd' }) });
     expect(conf.status).toBe(201);
     const confBody = await conf.json() as { client_id: string; client_secret: string | null };
     expectContract(S.Account_DevAppCreated, confBody);
@@ -396,10 +406,11 @@ describe('/api/dev/apps', () => {
   it('POST 400：名稱太短／redirect_uris 缺／http 非 localhost／越權 scope', async () => {
     const bearer = await dev();
     const bad = [
-      { app_name: 'x', redirect_uris: ['https://a.example.com'] },
-      { app_name: 'Good Name' },
+      invalid(S.Account_DevAppCreateBody, { app_name: 'x', redirect_uris: ['https://a.example.com'] }),
+      invalid(S.Account_DevAppCreateBody, { app_name: 'x'.repeat(81), redirect_uris: ['https://a.example.com'] }),
+      invalid(S.Account_DevAppCreateBody, { app_name: 'Good Name' }),
       { app_name: 'Good Name', redirect_uris: ['http://evil.example.com'] },
-      { app_name: 'Good Name', redirect_uris: ['https://a.example.com'], allowed_scopes: ['companion'] },
+      invalid(S.Account_DevAppCreateBody, { app_name: 'Good Name', redirect_uris: ['https://a.example.com'], allowed_scopes: ['companion'] }),
     ];
     for (const json of bad) await expectApiError(await hit('/api/dev/apps', 'post', '/api/dev/apps', { bearer, json }), 400, 'DATA_VALIDATION');
   });
@@ -424,12 +435,21 @@ describe('/api/dev/apps', () => {
 
   it('PATCH → 200；400（空 body／越權 scope／空 scopes）；404', async () => {
     const bearer = await dev();
-    const ok = await hit('/api/dev/apps/{client_id}', 'patch', `/api/dev/apps/${secretId}`, { bearer, json: { app_name: 'Renamed', app_logo_url: 'https://logo.example.com/a.png', allowed_scopes: ['openid', 'email'] } });
+    const ok = await hit('/api/dev/apps/{client_id}', 'patch', `/api/dev/apps/${secretId}`, { bearer, json: valid(S.Account_DevAppPatchBody, { app_name: 'Renamed', app_description: '新描述', app_logo_url: 'https://logo.example.com/a.png', homepage_url: 'https://home.example.com', redirect_uris: ['https://r.example.com/cb'], allowed_scopes: ['openid', 'email'] }) });
     expect(ok.status).toBe(200);
-    const body = await ok.json() as { app_name: string };
+    const body = await ok.json() as { app_name: string; app_logo_url: string | null };
     expectContract(S.Account_DevApp, body);
     expect(body.app_name).toBe('Renamed');
-    for (const json of [{}, { allowed_scopes: ['ops:maps'] }, { allowed_scopes: [] }, { app_name: 'x' }]) {
+    expect(body.app_logo_url).toBe('https://logo.example.com/a.png'); // 非 null 的案例
+    // 明細（GET）也要帶出剛寫入的 logo
+    const again = await api.get(`/api/dev/apps/${secretId}`, { bearer });
+    expect(((await again.json()) as { app_logo_url: string }).app_logo_url).toBe('https://logo.example.com/a.png');
+    // null 清除
+    const cleared = await api.request('PATCH', `/api/dev/apps/${secretId}`, { bearer, json: valid(S.Account_DevAppPatchBody, { app_logo_url: null }) });
+    const cb = await cleared.json();
+    expectContract(S.Account_DevApp, cb);
+    expect((cb as { app_logo_url: unknown }).app_logo_url).toBeNull();
+    for (const json of [{}, { allowed_scopes: ['ops:maps'] }, invalid(S.Account_DevAppPatchBody, { allowed_scopes: [] }), invalid(S.Account_DevAppPatchBody, { app_name: 'x' }), invalid(S.Account_DevAppPatchBody, { app_name: 'x'.repeat(81) })]) {
       await expectApiError(await hit('/api/dev/apps/{client_id}', 'patch', `/api/dev/apps/${secretId}`, { bearer, json }), 400, 'DATA_VALIDATION');
     }
     await expectApiError(await hit('/api/dev/apps/{client_id}', 'patch', '/api/dev/apps/nope', { bearer, json: { app_name: 'Whatever' } }), 404, 'APP_NOT_FOUND');
@@ -486,7 +506,7 @@ describe('/api/permissions', () => {
     await seedUser(db, invitee);
     await db.prepare(`UPDATE users SET email_verified_at = '2026-01-01T00:00:00Z' WHERE email = ?`).bind(invitee).run();
 
-    const a = await hit('/api/permissions', 'post', '/api/permissions', { bearer: ownerBearer, json: { email: invitee, tripId: TRIP, role: 'viewer' } });
+    const a = await hit('/api/permissions', 'post', '/api/permissions', { bearer: ownerBearer, json: valid(S.Account_PermissionCreateBody, { email: invitee, tripId: TRIP, role: 'viewer' }) });
     expect(a.status).toBe(201);
     const aBody = await a.json() as { id?: number; expiresAt?: string };
     expectContract(S.Account_PermissionCreated, aBody);
@@ -494,7 +514,7 @@ describe('/api/permissions', () => {
 
     await expectApiError(await hit('/api/permissions', 'post', '/api/permissions', { bearer: ownerBearer, json: { email: invitee, tripId: TRIP } }), 409, 'DATA_CONFLICT');
 
-    const b = await hit('/api/permissions', 'post', '/api/permissions', { bearer: ownerBearer, json: { email: 'Acct-New-Person@Test.com', tripId: TRIP } });
+    const b = await hit('/api/permissions', 'post', '/api/permissions', { bearer: ownerBearer, json: valid(S.Account_PermissionCreateBody, { email: 'Acct-New-Person@Test.com', tripId: TRIP }) });
     expect(b.status).toBe(201);
     const bBody = await b.json() as { email: string; id?: number; expiresAt?: string };
     expectContract(S.Account_PermissionCreated, bBody);
@@ -508,8 +528,8 @@ describe('/api/permissions', () => {
 
   it('POST 400／401／403／404／500', async () => {
     const post = (json: unknown, bearer?: string, client: Api = api) => hit('/api/permissions', 'post', '/api/permissions', { bearer, json }, client);
-    await expectApiError(await post({ tripId: TRIP }, ownerBearer), 400, 'DATA_VALIDATION');
-    await expectApiError(await post({ email: 'a@b.com', tripId: TRIP, role: 'owner' }, ownerBearer), 400, 'DATA_VALIDATION');
+    await expectApiError(await post(invalid(S.Account_PermissionCreateBody, { tripId: TRIP }), ownerBearer), 400, 'DATA_VALIDATION');
+    await expectApiError(await post(invalid(S.Account_PermissionCreateBody, { email: 'a@b.com', tripId: TRIP, role: 'owner' }), ownerBearer), 400, 'DATA_VALIDATION');
     await expectApiError(await post({ email: 'not-an-email', tripId: TRIP }, ownerBearer), 400, 'DATA_VALIDATION');
     await expectApiError(await post({ email: 'a@b.com', tripId: TRIP }), 401);
     await expectApiError(await post({ email: 'a@b.com', tripId: TRIP }, strangerBearer), 403, 'PERM_ADMIN_ONLY');
@@ -537,7 +557,7 @@ describe('/api/permissions', () => {
 
   it('PATCH → 200 { ok, role }；相同角色 → 200 { ok, unchanged }', async () => {
     const id = await addMember('acct-patch-m@test.com');
-    const changed = await hit('/api/permissions/{id}', 'patch', `/api/permissions/${id}`, { bearer: ownerBearer, json: { role: 'viewer' } });
+    const changed = await hit('/api/permissions/{id}', 'patch', `/api/permissions/${id}`, { bearer: ownerBearer, json: valid(S.Account_PermissionPatchBody, { role: 'viewer' }) });
     expect(changed.status).toBe(200);
     const cb = await changed.json();
     expectContract(S.Account_PermissionUpdated, cb);
@@ -552,7 +572,7 @@ describe('/api/permissions', () => {
     const id = await addMember('acct-patch-e@test.com');
     const owner = await ownerPermId();
     const patch = (pid: number | string, json: unknown, bearer?: string) => hit('/api/permissions/{id}', 'patch', `/api/permissions/${pid}`, { bearer, json });
-    await expectApiError(await patch(id, { role: 'owner' }, ownerBearer), 400, 'DATA_VALIDATION');
+    await expectApiError(await patch(id, invalid(S.Account_PermissionPatchBody, { role: 'owner' }), ownerBearer), 400, 'DATA_VALIDATION');
     await expectApiError(await patch(id, {}, ownerBearer), 400, 'DATA_VALIDATION');
     await expectApiError(await patch(id, { role: 'viewer' }), 401);
     await expectApiError(await patch(id, { role: 'viewer' }, strangerBearer), 403, 'PERM_ADMIN_ONLY');
@@ -633,7 +653,7 @@ describe('/api/invitations', () => {
   it('POST /accept → 200；之後再接受 → 410 INVITATION_ACCEPTED', async () => {
     const t = token();
     await seedInvitation(db, { tripId: INV_TRIP, token: t, invitedEmail: INVITEE, invitedBy: INV_OWNER });
-    const res = await hit('/api/invitations/accept', 'post', '/api/invitations/accept', { bearer: inviteeB, json: { token: t } });
+    const res = await hit('/api/invitations/accept', 'post', '/api/invitations/accept', { bearer: inviteeB, json: valid(S.Account_InvitationAcceptBody, { token: t }) });
     expect(res.status).toBe(200);
     const body = await res.json();
     expectContract(S.Account_InvitationAccepted, body);
@@ -643,7 +663,7 @@ describe('/api/invitations', () => {
 
   it('POST /accept 錯誤：400／401／403（email 不符、受限 token）／410（無效、過期）／500', async () => {
     const accept = (json: unknown, bearer?: string, client: Api = api) => hit('/api/invitations/accept', 'post', '/api/invitations/accept', { bearer, json }, client);
-    await expectApiError(await accept({}, inviteeB), 400, 'INVITATION_TOKEN_MISSING');
+    await expectApiError(await accept(invalid(S.Account_InvitationAcceptBody, {}), inviteeB), 400, 'INVITATION_TOKEN_MISSING');
     await expectApiError(await accept({ token: 'x' }), 401, 'AUTH_REQUIRED');
     const forOther = token();
     await seedInvitation(db, { tripId: INV_TRIP, token: forOther, invitedEmail: 'acct-someone-else@test.com', invitedBy: INV_OWNER });
@@ -658,7 +678,7 @@ describe('/api/invitations', () => {
 
   it('POST /revoke → 200 { ok, revoked }；再撤銷 → 404 INVITATION_NOT_FOUND', async () => {
     await seedInvitation(db, { tripId: INV_TRIP, token: token(), invitedEmail: 'acct-revoke@test.com', invitedBy: INV_OWNER });
-    const res = await hit('/api/invitations/revoke', 'post', '/api/invitations/revoke', { bearer: ownerB, json: { tripId: INV_TRIP, email: 'Acct-Revoke@test.com' } });
+    const res = await hit('/api/invitations/revoke', 'post', '/api/invitations/revoke', { bearer: ownerB, json: valid(S.Account_InvitationRevokeBody, { tripId: INV_TRIP, email: 'Acct-Revoke@test.com' }) });
     expect(res.status).toBe(200);
     const body = await res.json();
     expectContract(S.Account_InvitationRevoked, body);
@@ -668,7 +688,7 @@ describe('/api/invitations', () => {
 
   it('POST /revoke 錯誤：400 INVITATION_REVOKE_VALIDATION／401／403 非 owner／404 行程不存在', async () => {
     const revoke = (json: unknown, bearer?: string) => hit('/api/invitations/revoke', 'post', '/api/invitations/revoke', { bearer, json });
-    await expectApiError(await revoke({ tripId: INV_TRIP }, ownerB), 400, 'INVITATION_REVOKE_VALIDATION');
+    await expectApiError(await revoke(invalid(S.Account_InvitationRevokeBody, { tripId: INV_TRIP }), ownerB), 400, 'INVITATION_REVOKE_VALIDATION');
     await expectApiError(await revoke({ tripId: INV_TRIP, email: 'a@b.com' }), 401, 'AUTH_REQUIRED');
     await expectApiError(await revoke({ tripId: INV_TRIP, email: 'a@b.com' }, inviteeB), 403, 'PERM_ADMIN_ONLY');
     await expectApiError(await revoke({ tripId: 'no-such-trip', email: 'a@b.com' }, ownerB), 404, 'DATA_NOT_FOUND');

@@ -112,7 +112,7 @@ export function registerTripsCoreRoutes(app: OpenAPIHono<AppEnv>): void {
   });
 
   legacyRoute(app, {
-    method: 'get', path: '/api/trips/:id/audit', auth: 'optional', handler: auditGet, summary: '行程稽核紀錄',
+    method: 'get', path: '/api/trips/:id/audit', auth: 'required', handler: auditGet, summary: '行程稽核紀錄',
     docs: { query: S.Trips_AuditQuery, responses: {
       200: { description: '稽核紀錄（最新在前）。註冊為 optional，但 handler 一律要求登入，匿名會得到 401', schema: S.Trips_AuditList },
       400: E.badRequest,
@@ -133,7 +133,7 @@ export function registerTripsCoreRoutes(app: OpenAPIHono<AppEnv>): void {
   });
 
   legacyRoute(app, {
-    method: 'get', path: '/api/trips/:id/health-check', auth: 'optional', handler: healthCheckGet, summary: '行程健檢結果',
+    method: 'get', path: '/api/trips/:id/health-check', auth: 'required', handler: healthCheckGet, summary: '行程健檢結果',
     docs: { responses: {
       200: { description: '最新的 AI 健檢報告；尚未健檢時 report 為 null。註冊為 optional，但 handler 一律要求登入', schema: S.Trips_HealthCheckResult },
       401: E.unauthorized,
@@ -151,7 +151,7 @@ export function registerTripsCoreRoutes(app: OpenAPIHono<AppEnv>): void {
     } },
   });
   legacyRoute(app, {
-    method: 'get', path: '/api/trips/:id/health', auth: 'optional', handler: healthGet, summary: '行程健康度',
+    method: 'get', path: '/api/trips/:id/health', auth: 'required', handler: healthGet, summary: '行程健康度',
     docs: { responses: {
       200: { description: '歇業／缺漏 POI 摘要。回應鍵名為 snake_case（裸 Response，不經 camelCase 轉換）。註冊為 optional，但 handler 一律要求登入', schema: S.Trips_TripHealth },
       401: E.unauthorized,

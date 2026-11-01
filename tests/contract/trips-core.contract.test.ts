@@ -237,7 +237,7 @@ describe('GET /api/trips/:id/audit 與 POST …/audit/:aid/rollback', () => {
     await check('GET', t, `/api/trips/${PUB}/audit?limit=1&request_id=1`, 200, S.Trips_AuditList, { as: OWNER });
   });
   it('400：request_id 不是正整數', () => err('GET', t, `/api/trips/${PUB}/audit?request_id=abc`, 400, { as: OWNER }));
-  it('401：未登入（即使註冊為 optional，handler 仍要求登入）', () => err('GET', t, `/api/trips/${PUB}/audit`, 401));
+  it('401：未登入（這條與 health／health-check 的 GET 一律要登入，登記為 required）', () => err('GET', t, `/api/trips/${PUB}/audit`, 401));
   it('403：非成員', () => err('GET', t, `/api/trips/${PUB}/audit`, 403, { as: STRANGER }));
 
   it('200：update → 還原舊值', async () => {
@@ -396,11 +396,11 @@ const ROUTES: Array<{ method: string; path: string; auth: 'required' | 'optional
   { method: 'delete', path: '/api/trips/{id}', auth: 'required', body: false },
   { method: 'put', path: '/api/trips/{id}/archive', auth: 'required', body: false },
   { method: 'delete', path: '/api/trips/{id}/archive', auth: 'required', body: false },
-  { method: 'get', path: '/api/trips/{id}/audit', auth: 'optional', body: false },
+  { method: 'get', path: '/api/trips/{id}/audit', auth: 'required', body: false },
   { method: 'post', path: '/api/trips/{id}/audit/{aid}/rollback', auth: 'required', body: false },
-  { method: 'get', path: '/api/trips/{id}/health-check', auth: 'optional', body: false },
+  { method: 'get', path: '/api/trips/{id}/health-check', auth: 'required', body: false },
   { method: 'post', path: '/api/trips/{id}/health-check', auth: 'required', body: false },
-  { method: 'get', path: '/api/trips/{id}/health', auth: 'optional', body: false },
+  { method: 'get', path: '/api/trips/{id}/health', auth: 'required', body: false },
   { method: 'post', path: '/api/trips/{id}/recompute-travel', auth: 'required', body: false },
   { method: 'get', path: '/api/trips/{id}/segments', auth: 'optional', body: false },
   { method: 'post', path: '/api/trips/{id}/segments', auth: 'required', body: true },

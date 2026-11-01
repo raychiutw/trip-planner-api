@@ -11,7 +11,7 @@ import { stubGoogle, jsonOk } from '../baseline/google-stub';
 import { serviceToken } from '../baseline/service-token';
 import { invalidateLockCache } from '../../src/lib/maps-lock';
 import { ApiError } from '../../src/schemas/common';
-import { expectContract } from './support';
+import { contractIssues, expectContract } from './support';
 import * as S from '../../src/schemas/pois-places';
 import type { Env } from '../../src/env';
 
@@ -412,6 +412,74 @@ describe('public-config（公開）', () => {
     const body = await res.json() as { providers: { google: boolean } };
     expectContract(S.Pois_PublicConfigResponse, body);
     expect(body.providers.google).toBe(true);
+  });
+});
+
+describe('請求 body 的 schema 與 handler 一致', () => {
+  /** 送出的 body 必須符合文件的 body schema；handler 拒絕的 body，文件的 schema 也要判定不合法。 */
+  const accepted = (schema: Parameters<typeof expectContract>[0], body: unknown) => expectContract(schema, body);
+  const rejected = (schema: Parameters<typeof expectContract>[0], body: unknown) => expect(contractIssues(schema, body).length).toBeGreaterThan(0);
+
+  it('autocomplete body', async () => {
+    google.respond(() => jsonOk({ suggestions: [] }));
+    const ok = { q: '高雄市', sessionToken: 'tok', regionCode: 'tw' };
+    accepted(S.Pois_AutocompleteBody, ok);
+    expect((await api.request('POST', AC, { as: owner, json: ok })).status).toBe(200);
+    for (const bad of [{ q: 'x', sessionToken: 't' }, { q: '高雄市' }, { q: '高雄市', sessionToken: 't', regionCode: 'toolongcode' }, { q: 'a'.repeat(201), sessionToken: 't' }]) {
+      rejected(S.Pois_AutocompleteBody, bad);
+      expect((await api.request('POST', AC, { as: owner, json: bad })).status).toBe(400);
+    }
+  });
+  it('poi-favorites POST body', async () => {
+    const poiId = await seedPoi(db, { name: 'pp-body-fav' });
+    const ok = { poiId, note: 'n' };
+    accepted(S.Pois_FavoriteCreateBody, ok);
+    expect((await api.request('POST', FAVS, { as: other, json: ok, headers: { 'CF-Connecting-IP': '198.51.100.72' } })).status).toBe(201);
+    for (const bad of [{ poiId: 'x' }, { poiId: 0 }, { poiId: 1.5 }, {}]) {
+      rejected(S.Pois_FavoriteCreateBody, bad);
+      expect((await api.request('POST', FAVS, { as: other, json: bad, headers: { 'CF-Connecting-IP': '198.51.100.72' } })).status).toBe(400);
+    }
+  });
+  it('add-to-trip body', async () => {
+    const { favId } = await seedFavorite(owner, 'body-att');
+    const url = `${FAVS}/${favId}/add-to-trip`;
+    const h = { 'CF-Connecting-IP': '198.51.100.73' };
+    const ok = { tripId: TRIP, dayNum: 3, startTime: '15:00', endTime: '16:00' };
+    accepted(S.Pois_AddToTripBody, ok);
+    expect((await api.request('POST', url, { as: owner, json: ok, headers: h })).status).toBe(201);
+    for (const bad of [{ ...ok, tripId: undefined }, { ...ok, dayNum: 0 }, { ...ok, startTime: '9:00' }, { ...ok, endTime: 'noon' }, { ...ok, position: 'after' }]) {
+      rejected(S.Pois_AddToTripBody, bad);
+      expect((await api.request('POST', url, { as: owner, json: bad, headers: h })).status).toBe(400);
+    }
+  });
+  it('find-or-create body', async () => {
+    const ok = { name: 'pp-body-foc', type: 'restaurant', description: 'd', lat: 25, lng: 121, address: 'a', category: 'c', source: 's', country: 'JP', place_id: 'ChIJ_body' };
+    accepted(S.Pois_FindOrCreateBody, ok);
+    expect((await api.request('POST', FOC, { as: owner, json: ok })).status).toBe(200);
+    for (const bad of [{ type: 'restaurant' }, { name: 'x' }, { name: '  ', type: 'restaurant' }]) {
+      rejected(S.Pois_FindOrCreateBody, bad);
+      expect((await api.request('POST', FOC, { as: owner, json: bad })).status).toBe(400);
+    }
+  });
+  it('PATCH body：全部欄位送出並讀回非 null 的值', async () => {
+    const id = await seedTripPoi('body-patch');
+    const ok = {
+      tripId: TRIP, name: 'pp-body-patch2', description: 'd', note: 'n', address: 'addr', phone: '02-1234', email: 'a@b.c', website: 'https://x.test',
+      hours: '09:00', rating: 4.1, price: '¥500', category: 'cafe', lat: 25.1, lng: 121.2, country: 'TW', source: 'ai', place_id: 'ChIJ_pb',
+      status: 'closed', status_reason: '歇業', status_checked_at: '2026-01-01', last_refreshed_at: '2026-01-02', data_source: 'google',
+      osm_id: 123, osm_type: 'node', wikidata_id: 'Q1', cuisine: 'ramen',
+    };
+    accepted(S.Pois_PatchBody, ok);
+    const res = await api.request('PATCH', `/api/pois/${id}`, { as: owner, json: ok });
+    expect(res.status).toBe(200);
+    const row = await res.json() as Record<string, unknown>;
+    expectContract(S.Pois_PoiRow, row);
+    expect(row).toMatchObject({ price: '¥500', osmType: 'node', osmId: 123, wikidataId: 'Q1', cuisine: 'ramen', dataSource: 'google', placeId: 'ChIJ_pb', status: 'closed', statusReason: '歇業', lat: 25.1, rating: 4.1, email: 'a@b.c' });
+    // handler 拒絕（沒有任何白名單欄位）→ 文件的 body schema（strict）也判不合法
+    const bad = { tripId: TRIP, bogus: 1 };
+    rejected(S.Pois_PatchBody, bad);
+    expect((await api.request('PATCH', `/api/pois/${id}`, { as: owner, json: bad })).status).toBe(400);
+    rejected(S.Pois_PatchBody, { tripId: TRIP, price: 5 });
   });
 });
 

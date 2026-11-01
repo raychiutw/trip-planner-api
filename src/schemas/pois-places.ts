@@ -252,7 +252,7 @@ export const Pois_EnrichResponse = z.object({
 }).openapi('Pois_EnrichResponse');
 
 export const Pois_FindOrCreateBody = z.object({
-  name: z.string().min(1),
+  name: z.string().trim().min(1).openapi({ description: 'trim 後不可為空' }),
   type: z.string().min(1),
   description: z.string().nullable().optional(),
   lat: z.number().nullable().optional(),

@@ -14,6 +14,8 @@
  *   公開入口（challenge id 就是不可猜的憑證，由 POST /api/account/delete-reauth 發出）。
  *   challenge 必須存在、未過期、client 與環境相符、狀態為 pending 或 started，否則 403 ACCOUNT_DELETE_REAUTH_REQUIRED
  *   （JSON）。pending 轉 started；started 允許再開（授權連結被重新整理或預讀時不會卡死）。
+ *   web surface（challenge.surface='web'，clientId 必須是 tripline-web）：challenge 存在但已取消／過期／用過 → 302 導回固定的
+ *   `${WEB_ORIGIN}/account?deleteReauth=failed`（狀態不動）；找不到 challenge 仍是 403 JSON。
  *   沒帶 challenge 也是 403（舊入口的「瀏覽器 cookie proof」流程在新 api 不存在）。
  *   對 Google 帶 prompt=select_account、max_age=0、claims.auth_time essential；state（5 分鐘）寫失敗時，
  *   只有「本次請求自己轉成 started」才還原為 pending，不降級別人進行中的流程。
@@ -27,7 +29,7 @@ import { parseAllowedScopes } from '../../../../lib/oauth-request';
 import { oauthErrorResponse } from '../../../../errors';
 import { mobileOAuthContract } from '../../../../lib/mobile-oauth';
 import {
-  DELETE_PROOF_TTL_MS, mobileCallbackUrl, readMobileDeleteChallenge, transitionMobileDeleteChallenge,
+  DELETE_PROOF_TTL_MS, WEB_CLIENT_ID, mobileCallbackUrl, readMobileDeleteChallenge, transitionMobileDeleteChallenge, webReauthRedirect,
 } from '../../../../lib/delete-reauth';
 import type { Env } from '../../../../env';
 
@@ -53,12 +55,25 @@ async function startDeleteReauth(context: Parameters<PagesFunction<Env>>[0], goo
   if (!challengeId) return reauthRefused();
   const db = context.env.DB;
   const challenge = await readMobileDeleteChallenge(db, challengeId);
-  const contract = mobileOAuthContract(context.env, context.request);
-  if (!challenge || !contract || challenge.expired || challenge.clientId !== contract.clientId ||
-      (challenge.status !== 'pending' && challenge.status !== 'started')) {
-    return reauthRefused();
+  if (!challenge) return reauthRefused();
+  const web = challenge.surface === 'web';
+  let redirectUri: string;
+  if (web) {
+    if (challenge.clientId !== WEB_CLIENT_ID) return reauthRefused();
+    const failedRedirect = webReauthRedirect(context.env, 'failed');
+    // web 的瀏覽器導覽：已取消、過期、用過等一律導回固定的失敗網址（狀態不動）
+    if (challenge.expired || (challenge.status !== 'pending' && challenge.status !== 'started')) {
+      return new Response(null, { status: 302, headers: { Location: failedRedirect, 'cache-control': 'no-store' } });
+    }
+    redirectUri = webReauthRedirect(context.env, 'done');
+  } else {
+    const contract = mobileOAuthContract(context.env, context.request);
+    if (!contract || challenge.expired || challenge.clientId !== contract.clientId ||
+        (challenge.status !== 'pending' && challenge.status !== 'started')) {
+      return reauthRefused();
+    }
+    redirectUri = mobileCallbackUrl(context.env).toString();
   }
-  const redirect = mobileCallbackUrl(context.env);
   let startedByThisRequest = false;
   if (challenge.status === 'pending') {
     if (await transitionMobileDeleteChallenge(db, challengeId, challenge.uid, challenge.grantId, 'pending', 'started')) {
@@ -75,14 +90,14 @@ async function startDeleteReauth(context: Parameters<PagesFunction<Env>>[0], goo
     await new D1Adapter(db, 'GoogleLoginState').upsert(googleState, {
       provider: 'google',
       client_id: challenge.clientId,
-      redirect_uri: redirect.toString(),
+      redirect_uri: redirectUri,
       scopes: [],
       client_state: null,
       nonce,
       google_code_verifier: googleVerifier,
       first_party: false,
       created_at: Date.now(),
-      reauth: { uid: challenge.uid, challengeId, grantId: challenge.grantId, clientId: challenge.clientId },
+      reauth: { uid: challenge.uid, challengeId, grantId: challenge.grantId, clientId: challenge.clientId, surface: challenge.surface },
     }, DELETE_PROOF_TTL_MS / 1000);
   } catch (err) {
     // challenge 已轉為 started 但 state 沒寫成功：還原，否則使用者只能等它過期

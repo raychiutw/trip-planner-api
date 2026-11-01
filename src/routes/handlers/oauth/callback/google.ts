@@ -16,7 +16,9 @@
  * 帳號刪除重新驗證分支（state 帶 `reauth`，由 login/google?purpose=account-delete 建立；自舊入口移植）：
  *   取得 id_token claims 後驗證 nonce、auth_time 夠新（不早於開始時間、不在未來、不超過 5 分鐘），
  *   並以唯讀查詢確認 Google sub 對應到同一個帳號。**不建 user／identity、不更新 last_used_at、不發 authorization code**，
- *   只把 mobile challenge 由 started 轉 verified，302 回 mobile callback（?challenge_id=…&status=verified）。
+ *   只把 challenge 由 started 轉 verified。mobile surface：302 回 mobile callback（?challenge_id=…&status=verified）；
+ *   web surface：302 到 server 組成的固定網址 `${WEB_ORIGIN}/account?deleteReauth=done`（失敗為 `deleteReauth=failed`，不收任何呼叫者參數）。
+ *   state 與 challenge 的 surface 必須一致。
  *   任何失敗（含使用者取消、換 token 失敗）：challenge started→failed，302 回 ?challenge_id=…&status=failed；
  *   沒有可用 challenge 時回 JSON 403 ACCOUNT_DELETE_REAUTH_REQUIRED。
  */
@@ -29,7 +31,7 @@ import type { Env } from '../../../../env';
 import { notConfigured } from '../login/google';
 import { mobileOAuthContract } from '../../../../lib/mobile-oauth';
 import {
-  DELETE_PROOF_TTL_MS, readMobileDeleteChallenge, transitionMobileDeleteChallenge,
+  DELETE_PROOF_TTL_MS, WEB_CLIENT_ID, readMobileDeleteChallenge, transitionMobileDeleteChallenge, webReauthRedirect,
 } from '../../../../lib/delete-reauth';
 
 const CODE_TTL_SEC = 10 * 60;
@@ -56,7 +58,7 @@ interface GoogleLoginStatePayload {
   first_party?: boolean;
   dpop_jkt?: string;
   created_at?: number;
-  reauth?: { uid: string; challengeId: string; grantId: string; clientId: string };
+  reauth?: { uid: string; challengeId: string; grantId: string; clientId: string; surface?: 'web' | 'mobile' };
 }
 
 function errorResponse(code: string, message: string, status = 400): Response {
@@ -105,8 +107,14 @@ async function finishDeleteReauth(
   const reauth = row.reauth!;
   const db = context.env.DB;
   const contract = mobileOAuthContract(context.env, context.request);
+  const web = reauth.surface === 'web';
+  const clientOk = web ? reauth.clientId === WEB_CLIENT_ID : reauth.clientId === contract?.clientId;
   const reauthFailure = async (message: string, status = 403): Promise<Response> => {
-    if (reauth.clientId === contract?.clientId) {
+    if (clientOk && web) {
+      await transitionMobileDeleteChallenge(db, reauth.challengeId, reauth.uid, reauth.grantId, 'started', 'failed');
+      return new Response(null, { status: 302, headers: { Location: webReauthRedirect(context.env, 'failed'), 'cache-control': 'no-store' } });
+    }
+    if (clientOk) {
       await transitionMobileDeleteChallenge(db, reauth.challengeId, reauth.uid, reauth.grantId, 'started', 'failed');
       const redirect = new URL(row.redirect_uri!);
       redirect.searchParams.set('challenge_id', reauth.challengeId);
@@ -161,12 +169,15 @@ async function finishDeleteReauth(
     .bind('google', sub).first<{ user_id: string }>();
   if (identity?.user_id !== reauth.uid) return reauthFailure('驗證帳號不符');
 
-  if (reauth.clientId !== contract?.clientId) return reauthFailure('請重新驗證身分');
+  if (!clientOk) return reauthFailure('請重新驗證身分');
   const challenge = await readMobileDeleteChallenge(db, reauth.challengeId);
   if (!challenge || challenge.uid !== identity.user_id || challenge.grantId !== reauth.grantId ||
-      challenge.clientId !== reauth.clientId || challenge.expired ||
+      challenge.clientId !== reauth.clientId || challenge.surface !== (web ? 'web' : 'mobile') || challenge.expired ||
       !(await transitionMobileDeleteChallenge(db, reauth.challengeId, identity.user_id, challenge.grantId, 'started', 'verified'))) {
     return reauthFailure('請重新驗證身分');
+  }
+  if (web) {
+    return new Response(null, { status: 302, headers: { Location: webReauthRedirect(context.env, 'done'), 'cache-control': 'no-store' } });
   }
   const redirect = new URL(row.redirect_uri!);
   redirect.searchParams.set('challenge_id', reauth.challengeId);

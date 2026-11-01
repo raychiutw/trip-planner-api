@@ -1,30 +1,30 @@
 /**
- * 帳號刪除的 Google 重新驗證 challenge（mobile）：
+ * 帳號刪除的 Google 重新驗證 challenge（mobile 與 web 共用，以 surface 區分、不可互用）：
  *   POST   /api/account/delete-reauth                    建立 challenge，回 { challengeId, authorizeUrl, expiresIn }
  *   GET    /api/account/delete-reauth?challenge_id=…     查狀態 { status }（過期為 expired）
  *   DELETE /api/account/delete-reauth?challenge_id=…     取消
  *
  * 自舊入口 functions/api/account/delete-reauth.ts 移植，路徑與 wire 格式不變。
- * 認證：與環境相符的 mobile client 簽發、綁 grant 的 user bearer（requireMobileAccountActor）。
+ * 認證：與環境相符的 mobile client 簽發、綁 grant 的 user bearer（requireAccountActor）。
  * challenge 綁 uid + grantId + clientId；別人的、別的 grant 的一律 404 DATA_NOT_FOUND（不洩漏存在與否）。
  */
 import { AppError } from '../../../errors';
 import { getPublicOrigin, rawJson } from '../../../lib/utils';
 import { mobileOAuthContract } from '../../../lib/mobile-oauth';
 import {
-  DELETE_PROOF_TTL_MS, createMobileDeleteChallenge, mobileCallbackUrl, readMobileDeleteChallenge,
-  requireMobileAccountActor, transitionMobileDeleteChallenge,
+  DELETE_PROOF_TTL_MS, createMobileDeleteChallenge, mobileCallbackUrl, readMobileDeleteChallenge, webReauthRedirect,
+  requireAccountActor, transitionMobileDeleteChallenge,
 } from '../../../lib/delete-reauth';
 import type { Env } from '../../../env';
 
 type Context = Parameters<PagesFunction<Env>>[0];
 
 async function ownedChallenge(context: Context) {
-  const actor = requireMobileAccountActor(context);
+  const actor = requireAccountActor(context);
   const id = new URL(context.request.url).searchParams.get('challenge_id');
   if (!id) throw new AppError('DATA_VALIDATION', 'challenge_id 必填');
   const challenge = await readMobileDeleteChallenge(context.env.DB, id);
-  if (!challenge || challenge.uid !== actor.uid || challenge.grantId !== actor.grantId || challenge.clientId !== actor.clientId) {
+  if (!challenge || challenge.uid !== actor.uid || challenge.grantId !== actor.grantId || challenge.clientId !== actor.clientId || challenge.surface !== actor.surface) {
     throw new AppError('DATA_NOT_FOUND');
   }
   return { id, challenge, actor };
@@ -33,14 +33,18 @@ async function ownedChallenge(context: Context) {
 const noStore = (response: Response) => { response.headers.set('Cache-Control', 'no-store'); return response; };
 
 export const onRequestPost: PagesFunction<Env> = async (context) => {
-  const actor = requireMobileAccountActor(context);
-  if (mobileCallbackUrl(context.env).toString() !== mobileOAuthContract(context.env, context.request)?.redirectUri) {
-    throw new AppError('SERVER_MISCONFIG', 'Mobile OAuth callback 與環境不符');
+  const actor = requireAccountActor(context);
+  if (actor.surface === 'mobile') {
+    if (mobileCallbackUrl(context.env).toString() !== mobileOAuthContract(context.env, context.request)?.redirectUri) {
+      throw new AppError('SERVER_MISCONFIG', 'Mobile OAuth callback 與環境不符');
+    }
+  } else {
+    webReauthRedirect(context.env, 'done'); // 只驗證設定；導回網址由 callback 依設定組成
   }
   const identity = await context.env.DB.prepare("SELECT 1 FROM auth_identities WHERE user_id = ? AND provider = 'google'")
     .bind(actor.uid).first();
   if (!identity) throw new AppError('ACCOUNT_DELETE_REAUTH_REQUIRED', '此帳號沒有可用的重新驗證方式');
-  const challengeId = await createMobileDeleteChallenge(context.env.DB, actor.uid, actor.grantId, actor.clientId);
+  const challengeId = await createMobileDeleteChallenge(context.env.DB, actor.uid, actor.grantId, actor.clientId, actor.surface);
   const authorizeUrl = new URL('/api/oauth/login/google', getPublicOrigin(context.env, context.request));
   authorizeUrl.searchParams.set('purpose', 'account-delete');
   authorizeUrl.searchParams.set('challenge', challengeId);

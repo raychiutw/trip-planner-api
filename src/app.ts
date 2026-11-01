@@ -4,6 +4,7 @@ import type { AppEnv } from './env';
 import { AppError, errorResponse } from './errors';
 import { checkHealth, healthRoute } from './health';
 import { cors, requestId, securityHeaders } from './middleware';
+import { legacyGates } from './middleware/legacy-gates';
 import { DEFAULT_SSE_TIMINGS, registerRequestEventsRoutes, type SseTimings } from './routes/request-events';
 import { registerLegacyRoutes } from './routes';
 import { registerLoginRoute } from './routes/login';
@@ -23,6 +24,7 @@ export function createApp(opts: { sse?: Partial<SseTimings> } = {}) {
   app.use('*', requestId);
   app.use('*', securityHeaders);
   app.use('*', cors);
+  app.use('/api/*', legacyGates); // api_logs 紀錄 + companion 路徑白名單
   // Hono 只把 Error 實例交給 onError；丟出字串／物件會直接穿出去。包成 Error 讓它走同一條處理路徑。
   app.use('*', async (_c, next) => {
     try {

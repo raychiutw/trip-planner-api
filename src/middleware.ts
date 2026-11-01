@@ -33,7 +33,7 @@ function allowedOrigins(env: Env): Set<string> {
 }
 
 const ALLOW_METHODS = 'GET, POST, PUT, PATCH, DELETE, OPTIONS';
-const ALLOW_HEADERS = 'Authorization, Content-Type, Idempotency-Key, X-Request-Scope';
+const ALLOW_HEADERS = 'Authorization, Content-Type, DPoP, Idempotency-Key, X-Request-Scope';
 
 /**
  * 白名單內才放行；不在白名單（含 `null`、空字串）→ 403，連 preflight 也一樣。

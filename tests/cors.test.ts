@@ -89,6 +89,12 @@ describe('preflight', () => {
     expect(Number(res.headers.get('access-control-max-age'))).toBeGreaterThan(0);
   });
 
+  it('DPoP 請求標頭必須在允許清單（web 對 /api/oauth/token 與受保護路徑送 DPoP proof；少了瀏覽器會在預檢就擋掉）', async () => {
+    const res = await pre(WEB, { 'Access-Control-Request-Headers': 'authorization, content-type, dpop' });
+    expect(res.status).toBe(204);
+    expect(res.headers.get('access-control-allow-headers')?.split(/,\s*/).map((h) => h.toLowerCase())).toContain('dpop');
+  });
+
   it('不在白名單的 origin → 403，不洩漏允許的方法與標頭', async () => {
     const res = await pre('https://evil.example');
     expect(res.status).toBe(403);

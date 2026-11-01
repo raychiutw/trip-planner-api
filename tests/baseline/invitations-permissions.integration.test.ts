@@ -222,13 +222,14 @@ describe('共編管理只有 owner 能做（非 owner 與未登入都被擋，�
     expect(await db.prepare('SELECT 1 AS x FROM trip_invitations WHERE trip_id = ? AND invited_email = ?').bind(tripId, accepted).first()).not.toBeNull();
   });
 
-  it('PATCH／DELETE permissions：member／無關者 → 403、未登入 → 401，角色與列都不變', async () => {
+  it('PATCH／DELETE permissions：member／無關者 → 404（刻意與「不存在」相同，不洩漏 id 是否存在）、未登入 → 401，角色與列都不變', async () => {
     const targetEmail = `s15-pr41-auth-target-${Date.now()}@test.com`;
     const id = await seedPermission(targetEmail, 'viewer');
     await seedPermission(memberEmail, 'member').catch(() => undefined); // 前一個測試已建立時略過
     for (const who of [memberEmail, strangerEmail]) {
-      expect((await api.request('PATCH', `/api/permissions/${id}`, { as: who, json: { role: 'member' } })).status).toBe(403);
-      expect((await api.request('DELETE', `/api/permissions/${id}`, { as: who })).status).toBe(403);
+      // 舊入口回 403；現在沒有管理權的人一律得到與「紀錄不存在」相同的 404（見 tests/permissions-probe.test.ts）
+      expect((await api.request('PATCH', `/api/permissions/${id}`, { as: who, json: { role: 'member' } })).status).toBe(404);
+      expect((await api.request('DELETE', `/api/permissions/${id}`, { as: who })).status).toBe(404);
     }
     expect((await api.request('PATCH', `/api/permissions/${id}`, { json: { role: 'member' } })).status).toBe(401);
     expect((await api.request('DELETE', `/api/permissions/${id}`, {  })).status).toBe(401);
@@ -242,8 +243,9 @@ describe('共編管理只有 owner 能做（非 owner 與未登入都被擋，�
     const id = await seedPermission(`s15-pr41-restricted-target-${Date.now()}@test.com`, 'viewer');
     const opts = { as: ownerEmail, restrictTrip: tripId };
     expect((await api.request('POST', '/api/invitations/revoke', { ...opts, json: { tripId, email: inviteEmail } })).status).toBe(403);
-    expect((await api.request('PATCH', `/api/permissions/${id}`, { ...opts, json: { role: 'member' } })).status).toBe(403);
-    expect((await api.request('DELETE', `/api/permissions/${id}`, opts)).status).toBe(403);
+    // permissions/:id 對沒有管理權的呼叫者（含受限 token）一律 404，不洩漏紀錄是否存在；邀請端點仍是 403
+    expect((await api.request('PATCH', `/api/permissions/${id}`, { ...opts, json: { role: 'member' } })).status).toBe(404);
+    expect((await api.request('DELETE', `/api/permissions/${id}`, opts)).status).toBe(404);
     expect((await api.get(`/api/invitations?tripId=${tripId}`, opts)).status).toBe(403);
     expect(await db.prepare('SELECT 1 AS x FROM trip_invitations WHERE trip_id = ? AND invited_email = ?').bind(tripId, inviteEmail).first()).not.toBeNull();
     const row = await db.prepare('SELECT role FROM trip_permissions WHERE id = ?').bind(id).first<{ role: string }>();

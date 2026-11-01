@@ -12,11 +12,12 @@ import { buildRateLimitResponse, oauthErrorResponse } from '../errors';
 import { recordAuthEvent } from '../lib/auth-audit';
 import { generateOpaqueToken } from '../lib/crypto';
 import { readDpopHeader, verifyDpopProof } from '../lib/dpop';
+import { classifyDpopFailure, recordSecurityEvent } from '../lib/security-events';
 import { D1Adapter } from '../lib/oauth-d1-adapter';
 import { parseAllowedScopes, readBodyText } from '../lib/oauth-request';
 import { verifyPassword } from '../lib/password';
 import { bumpRateLimit, checkRateLimit, clientIp, RATE_LIMITS } from '../lib/rate-limit';
-import { ACCESS_TOKEN_TTL_SEC, exchangeAuthorizationCode, rotateRefreshToken } from '../lib/token-lifecycle';
+import { SERVICE_ACCESS_TOKEN_TTL_SEC, USER_ACCESS_TOKEN_TTL_SEC, exchangeAuthorizationCode, rotateRefreshToken } from '../lib/token-lifecycle';
 
 interface ClientAppRow {
   client_id: string;
@@ -119,7 +120,11 @@ export function registerTokenRoute(app: Hono<AppEnv>): void {
     const required = (c.env.DPOP_REQUIRED_CLIENTS ?? '').split(',').map((x) => x.trim()).filter(Boolean).includes(clientId);
     if (readDpopHeader(request) !== null || required) {
       const dpop = await verifyDpopProof(request, DB);
-      if (!dpop.ok) return oauthError('invalid_dpop_proof', 'Invalid or missing DPoP proof');
+      if (!dpop.ok) {
+        // 「沒帶 proof 但 client 被強制要求」是設定上的拒絕，不是簽章錯誤；其餘（簽章、欄位、重放）寫稽核並告警
+        if (dpop.reason !== 'missing') await recordSecurityEvent(c.env, request, { ...classifyDpopFailure(dpop.reason), clientId });
+        return oauthError('invalid_dpop_proof', 'Invalid or missing DPoP proof');
+      }
       dpopJkt = dpop.jkt;
     }
 
@@ -138,13 +143,13 @@ export function registerTokenRoute(app: Hono<AppEnv>): void {
       await new D1Adapter(DB, 'AccessToken').upsert(
         accessToken,
         { client_id: clientId, user_id: null, scopes: finalScopes, grantId: crypto.randomUUID(), ...(dpopJkt ? { cnf: { jkt: dpopJkt } } : {}) },
-        ACCESS_TOKEN_TTL_SEC,
+        SERVICE_ACCESS_TOKEN_TTL_SEC,
       );
       await recordAuthEvent(DB, request, {
         eventType: 'token_issue', outcome: 'success', userId: null, clientId,
         metadata: { grant_type: 'client_credentials', scopes: finalScopes },
       }, c.env);
-      return tokenJson({ access_token: accessToken, token_type: dpopJkt ? 'DPoP' : 'Bearer', expires_in: ACCESS_TOKEN_TTL_SEC, scope: finalScopes.join(' ') });
+      return tokenJson({ access_token: accessToken, token_type: dpopJkt ? 'DPoP' : 'Bearer', expires_in: SERVICE_ACCESS_TOKEN_TTL_SEC, scope: finalScopes.join(' ') });
     }
 
     const result = grantType === 'refresh_token'
@@ -155,7 +160,7 @@ export function registerTokenRoute(app: Hono<AppEnv>): void {
       access_token: result.tokens.access_token,
       refresh_token: result.tokens.refresh_token,
       token_type: dpopJkt ? 'DPoP' : 'Bearer',
-      expires_in: ACCESS_TOKEN_TTL_SEC,
+      expires_in: USER_ACCESS_TOKEN_TTL_SEC,
       scope: result.scopes.join(' '),
     });
   });

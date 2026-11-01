@@ -145,9 +145,12 @@ describe('POST /api/oauth/downscope', () => {
     expect(res.status).toBe(403);
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe('PERM_DENIED');
     expect(await mintedBesides(caller)).toHaveLength(0);
-    const audit = await auditRows({ userId: OUTSIDER_ID });
+    const all = await auditRows({ userId: OUTSIDER_ID });
+    // 新 api：權限拒絕另外寫一筆 permission_denied（T11）；token_issue 的失敗紀錄維持與舊入口相同
+    const audit = all.filter((r) => r.event_type === 'token_issue');
     expect(audit).toHaveLength(1);
     expect(audit[0]).toMatchObject({ event_type: 'token_issue', outcome: 'failure', failure_reason: 'no_write_permission', user_id: OUTSIDER_ID });
+    expect(all.filter((r) => r.event_type === 'permission_denied')).toHaveLength(1);
   });
 
   it('service token（user_id=null）→ PERM_DENIED，不查寫權也不發 token', async () => {
@@ -158,7 +161,9 @@ describe('POST /api/oauth/downscope', () => {
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe('PERM_DENIED');
     expect(await mintedBesides(caller)).toHaveLength(0);
     // 寫權檢查失敗才會留 no_write_permission 紀錄；沒有表示在檢查之前就被擋
-    expect(await auditRows({ clientId: SERVICE_CLIENT })).toHaveLength(0);
+    const rows = await auditRows({ clientId: SERVICE_CLIENT });
+    expect(rows.filter((r) => r.event_type === 'token_issue')).toHaveLength(0);
+    expect(rows.filter((r) => r.event_type === 'permission_denied')).toHaveLength(1); // T11：權限拒絕另外留稽核
   });
 
   it('已受限 token → PERM_DENIED（防外洩受限 token 再提權）', async () => {
@@ -168,7 +173,9 @@ describe('POST /api/oauth/downscope', () => {
     expect(res.status).toBe(403);
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe('PERM_DENIED');
     expect(await mintedBesides(caller)).toHaveLength(0);
-    expect(await auditRows({ userId: ownerUserId })).toHaveLength(0);
+    const rows = await auditRows({ userId: ownerUserId });
+    expect(rows.filter((r) => r.event_type === 'token_issue')).toHaveLength(0);
+    expect(rows.filter((r) => r.event_type === 'permission_denied')).toHaveLength(1); // T11：權限拒絕另外留稽核
   });
 
   it('缺 trip_id → DATA_VALIDATION', async () => {

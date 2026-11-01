@@ -24,6 +24,7 @@ import { sha256Base64Url } from '../lib/crypto';
 import { D1Adapter } from '../lib/oauth-d1-adapter';
 import { parseAllowedScopes, readJsonObject } from '../lib/oauth-request';
 import { verifyPassword } from '../lib/password';
+import { recordSecurityEvent } from '../lib/security-events';
 import { bumpRateLimit, bumpTieredLock, clientIp, RATE_LIMITS, refundRateLimit, resetRateLimit } from '../lib/rate-limit';
 
 const MAX_PASSWORD_LENGTH = 1024;
@@ -79,9 +80,15 @@ export function registerLoginRoute(app: Hono<AppEnv>): void {
     const pairKey = `login:${ip}:${await sha256Base64Url(email)}`;
     // 先保留「IP × 帳號」；被擋的嘗試不會灌高整體 IP 的計數
     const pairReserved = await bumpTieredLock(DB, pairKey, RATE_LIMITS.LOGIN_PAIR);
-    if (!pairReserved.ok) return rateLimited(pairReserved.retryAfter ?? 60);
+    if (!pairReserved.ok) {
+      await recordSecurityEvent(c.env, request, { kind: 'rate_limited', reason: 'login_locked', clientId });
+      return rateLimited(pairReserved.retryAfter ?? 60);
+    }
     const ipReserved = await bumpRateLimit(DB, ipKey, RATE_LIMITS.LOGIN_IP);
-    if (!ipReserved.ok) return rateLimited(ipReserved.retryAfter ?? 60);
+    if (!ipReserved.ok) {
+      await recordSecurityEvent(c.env, request, { kind: 'rate_limited', reason: 'login_ip_locked', clientId });
+      return rateLimited(ipReserved.retryAfter ?? 60);
+    }
 
     // 5. 驗證：一律做一次雜湊運算（真的或假的），再統一判斷
     const identity = await DB.prepare(

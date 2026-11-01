@@ -6,6 +6,7 @@ import { checkHealth, healthRoute } from './health';
 import { cors, requestId, securityHeaders } from './middleware';
 import { legacyGates } from './middleware/legacy-gates';
 import { DEFAULT_SSE_TIMINGS, registerRequestEventsRoutes, type SseTimings } from './routes/request-events';
+import { registerOpenApiDocs } from './openapi-docs';
 import { registerLegacyRoutes } from './routes';
 import { registerLoginRoute } from './routes/login';
 import { registerTokenRoute } from './routes/token';
@@ -60,6 +61,8 @@ export function createApp(opts: { sse?: Partial<SseTimings> } = {}) {
   registerLoginRoute(app);
   registerLegacyRoutes(app);
   registerTokenRoute(app);
+
+  registerOpenApiDocs(app);
 
   app.doc('/openapi.json', {
     openapi: '3.1.0',

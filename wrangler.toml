@@ -10,3 +10,16 @@ binding = "DB"
 database_name = "trip-planner-db-staging"
 database_id = "53f38e2c-e17d-4961-ba9e-f61e63477ecc"
 migrations_dir = "migrations"
+
+# T21 切換用的 production 環境（草案）。**不會被目前的部署流程用到**：deploy.yml 仍部署頂層（staging）。
+# 切換時以 `wrangler deploy --env production` 與 `wrangler d1 migrations apply DB --env production --remote` 使用，
+# 需先設好 secrets（SESSION_SECRET、OAUTH_SIGNING_PRIVATE_KEY、PUBLIC_ORIGIN、WEB_ORIGIN、ALLOWED_ORIGINS）。
+# 與舊入口共用同一個 production D1（trip-planner-db）：migration 0099、0100 為 additive，必須先套再切流量。
+[env.production]
+name = "trip-planner-api-production"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "trip-planner-db"
+database_id = "d61c42d5-8083-4e18-9b6c-70e133e37322"
+migrations_dir = "migrations"

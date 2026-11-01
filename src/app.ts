@@ -5,6 +5,7 @@ import { AppError, errorResponse } from './errors';
 import { checkHealth, healthRoute } from './health';
 import { cors, requestId, securityHeaders } from './middleware';
 import { DEFAULT_SSE_TIMINGS, registerRequestEventsRoutes, type SseTimings } from './routes/request-events';
+import { registerLoginRoute } from './routes/login';
 import { registerTokenRoute } from './routes/token';
 
 export function createApp(opts: { sse?: Partial<SseTimings> } = {}) {
@@ -53,6 +54,7 @@ export function createApp(opts: { sse?: Partial<SseTimings> } = {}) {
   });
 
   registerRequestEventsRoutes(app, { ...DEFAULT_SSE_TIMINGS, ...opts.sse });
+  registerLoginRoute(app);
   registerTokenRoute(app);
 
   app.doc('/openapi.json', {

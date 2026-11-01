@@ -20,7 +20,8 @@ function failure(error: 'invalid_request' | 'invalid_grant' | 'invalid_scope', d
 interface AuthorizationCodePayload extends AdapterPayload {
   client_id: string;
   user_id: string;
-  redirect_uri: string;
+  /** 第一方直接登入換的 code 沒有 redirect_uri（null）；跳轉授權的 code 有。 */
+  redirect_uri: string | null;
   scopes: string[];
   code_challenge: string | null;
   code_challenge_method: 'S256' | null;
@@ -89,7 +90,8 @@ export async function exchangeAuthorizationCode(
   if (codeRow.client_id !== clientId) {
     return failure('invalid_grant', 'code does not belong to this client');
   }
-  if (codeRow.redirect_uri !== body.redirect_uri) {
+  // null／空字串都表示「沒有 redirect_uri」；兩邊必須一致（第一方 code 不可被帶著 redirect_uri 兌換）
+  if ((codeRow.redirect_uri || null) !== (body.redirect_uri || null)) {
     return failure('invalid_grant', 'redirect_uri mismatch');
   }
 

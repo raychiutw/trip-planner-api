@@ -134,6 +134,69 @@ export async function bumpRateLimit(
   return { ok: true, count: row.count };
 }
 
+/** 階梯式鎖定設定：每累積 maxAttempts 次嘗試鎖一次；第 N 次鎖的時間取 lockoutMs[N-1]，超過的沿用最後一個。 */
+export interface TieredLockConfig {
+  maxAttempts: number;
+  /** 超過這段時間沒有新的嘗試就整個歸零（含階段）。 */
+  windowMs: number;
+  lockoutMs: readonly [number, ...number[]];
+}
+
+/**
+ * 階梯式鎖定的「保留一次嘗試」：單一原子語句完成遞增、鎖定判斷與換階段。
+ *
+ *   第 maxAttempts+1 次嘗試觸發鎖定（那一次本身也被擋）→ 鎖 lockoutMs[0]；
+ *   鎖定期間的嘗試不計數；鎖定到期後自動開新的一輪（下一次嘗試算第 1 次）；
+ *   再累積 maxAttempts 次 → 鎖 lockoutMs[1]；之後每輪都沿用最後一個時間。
+ * 回傳 ok=false 表示這次嘗試被擋（已鎖定，或剛好觸發鎖定）。成功時由呼叫端 resetRateLimit 整組清零。
+ */
+export async function bumpTieredLock(db: D1Database, key: string, cfg: TieredLockConfig): Promise<RateLimitResult> {
+  const now = Date.now();
+  const first = cfg.lockoutMs[0];
+  const rest = cfg.lockoutMs[1] ?? first;
+  const row = await db
+    .prepare(
+      `INSERT INTO rate_limit_buckets (bucket_key, count, window_start, locked_until, lock_level)
+       VALUES (?1, 1, ?2, NULL, 0)
+       ON CONFLICT(bucket_key) DO UPDATE SET
+         count = CASE
+           WHEN window_start + ?3 < ?2 THEN 1
+           WHEN locked_until > ?2 THEN count
+           WHEN locked_until IS NOT NULL THEN 1
+           ELSE count + 1 END,
+         window_start = CASE WHEN window_start + ?3 < ?2 THEN ?2 ELSE window_start END,
+         locked_until = CASE
+           WHEN window_start + ?3 < ?2 THEN NULL
+           WHEN locked_until > ?2 THEN locked_until
+           WHEN locked_until IS NOT NULL THEN NULL
+           WHEN count + 1 > ?4 THEN ?2 + CASE WHEN lock_level = 0 THEN ?5 ELSE ?6 END
+           ELSE NULL END,
+         lock_level = CASE
+           WHEN window_start + ?3 < ?2 THEN 0
+           WHEN locked_until IS NOT NULL THEN lock_level
+           WHEN count + 1 > ?4 THEN lock_level + 1
+           ELSE lock_level END
+       RETURNING count, locked_until`,
+    )
+    .bind(key, now, cfg.windowMs, cfg.maxAttempts, first, rest)
+    .first<{ count: number; locked_until: number | null }>();
+  if (row?.locked_until && row.locked_until > now) {
+    return { ok: false, retryAfter: Math.ceil((row.locked_until - now) / 1000), count: row.count };
+  }
+  return { ok: true, count: row?.count ?? 1 };
+}
+
+/**
+ * 退還一次先前「保留」的嘗試（count 減 1，最低 0）。
+ * 用於「驗證前先保留、成功再退還」：計數因此只等於淨失敗數。已被鎖定的 bucket 不退還。
+ */
+export async function refundRateLimit(db: D1Database, key: string): Promise<void> {
+  await db
+    .prepare('UPDATE rate_limit_buckets SET count = MAX(count - 1, 0) WHERE bucket_key = ? AND (locked_until IS NULL OR locked_until <= ?)')
+    .bind(key, Date.now())
+    .run();
+}
+
 /**
  * Reset counter on successful attempt — prevent legitimate user being locked
  * out from accumulated previous failures。
@@ -157,6 +220,11 @@ export function clientIp(request: Request): string {
 export const RATE_LIMITS = {
   // Anti brute-force login: 5 attempts / 15min window, 30min lockout
   LOGIN: { maxAttempts: 5, windowMs: 15 * 60 * 1000, lockoutMs: 30 * 60 * 1000 },
+  // 登入 IP × 帳號：錯 10 次鎖 10 分鐘，鎖完再錯 10 次鎖 30 分鐘（之後每輪 30 分鐘）；24 小時沒有新的嘗試就歸零。
+  LOGIN_PAIR: { maxAttempts: 10, windowMs: 24 * 60 * 60 * 1000, lockoutMs: [10 * 60 * 1000, 30 * 60 * 1000] } as TieredLockConfig,
+  // 登入 per-IP：只計「失敗」且成功不清零（否則攻擊者穿插自己的成功登入就能無限試別人的帳號）。
+  // 門檻 50 次：只負責擋單一 IP 對大量帳號的撞庫；要比「IP × 帳號」的階梯（10＋10）寬鬆，才不會干擾它，也不會誤鎖共用 NAT 的正常使用者。
+  LOGIN_IP: { maxAttempts: 50, windowMs: 15 * 60 * 1000, lockoutMs: 30 * 60 * 1000 },
   // Signup spam protection: 10 attempts / 1h window, 1h lockout.
   // (Was 3/h per autoplan; bumped — too tight for dev self-testing + shared NAT IP)
   SIGNUP: { maxAttempts: 10, windowMs: 60 * 60 * 1000, lockoutMs: 60 * 60 * 1000 },

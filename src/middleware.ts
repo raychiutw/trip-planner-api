@@ -44,14 +44,20 @@ export const cors: MiddlewareHandler<AppEnv> = async (c, next) => {
   if (origin === undefined) return next();
   if (!allowedOrigins(c.env).has(origin)) return errorResponse(new AppError('PERM_DENIED'));
 
-  c.header('Access-Control-Allow-Origin', origin);
-  c.header('Vary', 'Origin');
-  c.header('Access-Control-Expose-Headers', 'Retry-After, X-Request-Id');
+  const setCorsHeaders = () => {
+    c.header('Access-Control-Allow-Origin', origin);
+    c.header('Vary', 'Origin');
+    c.header('Access-Control-Expose-Headers', 'Retry-After, X-Request-Id');
+  };
   if (c.req.method === 'OPTIONS') {
+    setCorsHeaders();
     c.header('Access-Control-Allow-Methods', ALLOW_METHODS);
     c.header('Access-Control-Allow-Headers', ALLOW_HEADERS);
     c.header('Access-Control-Max-Age', '600');
     return c.body(null, 204);
   }
-  return next();
+  await next();
+  // 在 next() 之後才設：token／login 這類路由直接回傳原始 Response，錯誤也走 onError 另建 Response，
+  // 事前用 c.header 設的標頭會被丟掉，瀏覽器就把真正的錯誤顯示成「沒有 Access-Control-Allow-Origin」。
+  setCorsHeaders();
 };

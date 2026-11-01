@@ -2,6 +2,7 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 import { HTTPException } from 'hono/http-exception';
 import type { AppEnv } from './env';
 import { AppError, errorResponse } from './errors';
+import { recordSecurityEvent } from './lib/security-events';
 import { checkHealth, healthRoute } from './health';
 import { cors, requestId, securityHeaders } from './middleware';
 import { legacyGates } from './middleware/legacy-gates';
@@ -10,6 +11,8 @@ import { registerOpenApiDocs } from './openapi-docs';
 import { registerLegacyRoutes } from './routes';
 import { registerLoginRoute } from './routes/login';
 import { registerTokenRoute } from './routes/token';
+
+const PERMISSION_CODES: ReadonlySet<string> = new Set(['PERM_DENIED', 'PERM_ADMIN_ONLY', 'PERM_NOT_OWNER']);
 
 export function createApp(opts: { sse?: Partial<SseTimings> } = {}) {
   const app = new OpenAPIHono<AppEnv>({
@@ -41,6 +44,11 @@ export function createApp(opts: { sse?: Partial<SseTimings> } = {}) {
     const id = c.get('requestId');
     if (err instanceof AppError) {
       if (err.status >= 500) console.error(`[${id}] AppError ${err.code}`, err.detail ?? '', err);
+      if (PERMISSION_CODES.has(err.code)) {
+        // 權限拒絕寫稽核；onError 不能是 async 以外的做法，所以回傳 Promise
+        return recordSecurityEvent(c.env, c.req.raw, { kind: 'permission_denied', reason: err.code, userId: c.get('auth')?.userId ?? null, clientId: c.get('auth')?.clientId ?? null })
+          .then(() => errorResponse(err));
+      }
       return errorResponse(err);
     }
     // 畸形 JSON 等 client 錯誤（Hono 以 HTTPException 4xx 表示）

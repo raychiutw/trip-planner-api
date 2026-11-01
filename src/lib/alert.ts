@@ -33,17 +33,8 @@ export async function alertAdminTelegram(env: AlertEnv, message: string): Promis
     });
     return;
   }
-  // v2.33.134：log start + end 含 token prefix（前 10 chars）/ chat_id 末 4 / 訊息長度
-  // → wrangler tail 可看到呼叫鏈，forensic forgot-password silent fail 用
-  const tokenPrefix = token.slice(0, 10);
-  const chatTail = chatId.slice(-4);
-  const msgPreview = message.slice(0, 80);
-  console.log('[alert] sending', {
-    tokenPrefix,
-    chatTail,
-    msgPreview,
-    msgLen: message.length,
-  });
+  // 不 log bot token（連前綴都不行）與 chat id；只留訊息長度與耗時，足以追呼叫鏈
+  console.log('[alert] sending', { msgLen: message.length });
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 5_000);
   const t0 = Date.now();
@@ -64,8 +55,6 @@ export async function alertAdminTelegram(env: AlertEnv, message: string): Promis
         status: res.status,
         body: errText.slice(0, 200),
         elapsedMs,
-        tokenPrefix,
-        chatTail,
       });
       return;
     }
@@ -76,8 +65,6 @@ export async function alertAdminTelegram(env: AlertEnv, message: string): Promis
       error: err instanceof Error ? err.message : String(err),
       elapsedMs,
       aborted: ctrl.signal.aborted,
-      tokenPrefix,
-      chatTail,
     });
   } finally {
     clearTimeout(timer);

@@ -13,6 +13,7 @@ import type { MiddlewareHandler } from 'hono';
 import { AppError, errorResponse } from './errors';
 import type { AppEnv } from './env';
 import { verifyDpopProof } from './lib/dpop';
+import { classifyDpopFailure, recordSecurityEvent, type SecurityEvent } from './lib/security-events';
 import { isFirstPartyClientId } from './lib/first-party';
 import { D1Adapter, type AdapterPayload } from './lib/oauth-d1-adapter';
 import type { AuthData } from './types';
@@ -61,28 +62,36 @@ export const bearerAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
   const header = c.req.header('Authorization');
   if (header === undefined) return next();
 
+  /** 失敗：寫稽核（必要時告警）後回 401；稽核失敗不影響回應。 */
+  const fail = async (ev: SecurityEvent, scheme: 'Bearer' | 'DPoP' = 'Bearer'): Promise<Response> => {
+    await recordSecurityEvent(c.env, c.req.raw, ev);
+    return unauthorized(scheme);
+  };
+
   // 帶 Origin 的 Bearer 請求由全域 cors middleware 先擋（不在白名單 → 403），這裡不重複。
   const parsed = parseAuthorization(header);
-  if (!parsed) return unauthorized();
+  if (!parsed) return fail({ kind: 'auth_failure', reason: 'malformed_authorization' });
   const { scheme, token } = parsed;
   let resolved: Awaited<ReturnType<typeof resolveToken>> = null;
   try {
     resolved = await resolveToken(c.env.DB, token, (c.env as { TP_REQUEST_CLIENT_ID?: string }).TP_REQUEST_CLIENT_ID);
     if (resolved) {
+      const who = { userId: resolved.auth.userId, clientId: resolved.auth.clientId };
       if (scheme === 'Bearer') {
         // 綁定金鑰的 token 不可當 Bearer 用（外洩的 token 不能降級）
-        if (resolved.boundJkt) return unauthorized('DPoP');
+        if (resolved.boundJkt) return fail({ kind: 'auth_failure', reason: 'dpop_required', ...who }, 'DPoP');
       } else {
         // DPoP scheme 只收綁定的 token，且 proof 的金鑰必須就是綁定的那把
-        if (!resolved.boundJkt) return unauthorized('DPoP');
+        if (!resolved.boundJkt) return fail({ kind: 'auth_failure', reason: 'dpop_unbound', ...who }, 'DPoP');
         const proof = await verifyDpopProof(c.req.raw, c.env.DB, { accessToken: token });
-        if (!proof.ok || proof.jkt !== resolved.boundJkt) return unauthorized('DPoP');
+        if (!proof.ok) return fail({ ...classifyDpopFailure(proof.reason), ...who }, 'DPoP');
+        if (proof.jkt !== resolved.boundJkt) return fail({ kind: 'signature_error', reason: 'key_mismatch', ...who }, 'DPoP');
       }
     }
   } catch {
     resolved = null; // fail-closed
   }
-  if (!resolved) return unauthorized(scheme);
+  if (!resolved) return fail({ kind: 'auth_failure', reason: 'invalid_token' }, scheme);
   const auth = resolved.auth;
   c.set('auth', auth);
   c.set('accessToken', token);

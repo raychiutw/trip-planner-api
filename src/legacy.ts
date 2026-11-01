@@ -53,6 +53,8 @@ export interface LegacyRouteDocs {
   query?: z.ZodObject<z.ZodRawShape>;
   /** JSON 請求 body。 */
   body?: z.ZodTypeAny;
+  /** body 是否必填（預設 true）；handler 自己決定要不要 body 的端點（body 為選填）請設 false。 */
+  bodyRequired?: boolean;
   /** 各狀態碼的回應；schema 沒給代表沒有固定的 JSON 內容（例如 302、204）。 */
   responses?: Record<number, { description: string; schema?: z.ZodTypeAny }>;
 }
@@ -91,7 +93,7 @@ export function legacyRoute(app: OpenAPIHono<AppEnv>, spec: LegacyRouteSpec): vo
     request: {
       ...(names.length ? { params: z.object(Object.fromEntries(names.map((n) => [n, z.string()]))) } : {}),
       ...(docs?.query ? { query: docs.query } : {}),
-      ...(docs?.body ? { body: { required: true, content: { 'application/json': { schema: docs.body } } } } : {}),
+      ...(docs?.body ? { body: { required: docs.bodyRequired ?? true, content: { 'application/json': { schema: docs.body } } } } : {}),
     },
     responses,
   });

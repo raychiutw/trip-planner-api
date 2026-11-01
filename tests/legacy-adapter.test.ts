@@ -145,6 +145,18 @@ describe('legacyRoute 的 OpenAPI 文件（只做文件，不在執行期驗證�
     expect(doc.paths['/api/zn']!.get!.security ?? []).toEqual([]);
   });
 
+  it('body 預設必填；bodyRequired:false 時文件標為選填（handler 自己決定要不要 body 的端點）', async () => {
+    const mk = (path: string, bodyRequired?: boolean) => (a: ReturnType<typeof createApp>) => legacyRoute(a, {
+      method: 'post', path, auth: 'none', handler: (() => Response.json({})) as never,
+      docs: { body: Body, ...(bodyRequired === undefined ? {} : { bodyRequired }) },
+    });
+    const doc = await docOf(appWith((a) => { mk('/api/zb1')(a); mk('/api/zb2', false)(a); mk('/api/zb3', true)(a); }));
+    const required = (p: string) => (doc.paths[p]!.post!.requestBody as { required?: boolean }).required;
+    expect(required('/api/zb1')).toBe(true);
+    expect(required('/api/zb2')).toBe(false);
+    expect(required('/api/zb3')).toBe(true);
+  });
+
   it('沒有提供 docs 時維持原本的預設文件（200 任意內容）', async () => {
     const doc = await docOf(appWith((a) => legacyRoute(a, { method: 'get', path: '/api/zd', auth: 'none', handler: (() => Response.json({})) as never })));
     expect(Object.keys(doc.paths['/api/zd']!.get!.responses)).toEqual(['200']);

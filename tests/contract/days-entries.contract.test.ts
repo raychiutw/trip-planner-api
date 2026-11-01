@@ -17,6 +17,23 @@ const ORIGIN = 'https://trip-planner-dby.pages.dev';
 
 let db: D1Database;
 let api: Api;
+const T = '/api/trips/{id}';
+/** 各寫入路由文件上的 body schema。 */
+const BODIES: Record<string, z.ZodTypeAny> = {
+  [`POST ${T}/days`]: S.DaysCreateBody,
+  [`POST ${T}/days/shift`]: S.DaysShiftBody,
+  [`PUT ${T}/days/{num}`]: S.DayReplaceBody,
+  [`POST ${T}/days/{num}/entries`]: S.EntryCreateBody,
+  [`PATCH ${T}/entries/batch`]: S.EntriesBatchBody,
+  [`PATCH ${T}/entries/{eid}`]: S.EntryPatchBody,
+  [`POST ${T}/entries/{eid}/alternates`]: S.AlternateAddBody,
+  [`PATCH ${T}/entries/{eid}/alternates/reorder`]: S.AlternateReorderBody,
+  [`POST ${T}/entries/{eid}/copy`]: S.EntryCopyBody,
+  [`PATCH ${T}/entries/{eid}/master`]: S.EntryMasterBody,
+  [`PUT ${T}/entries/{eid}/poi-id`]: S.PoiIdReplaceBody,
+  [`PATCH ${T}/entries/{eid}/pois/{poiId}`]: S.EntryPoiPatchBody,
+  [`POST ${T}/entries/{eid}/trip-pois`]: S.EntryTripPoiBody,
+};
 /** 路由 key（`METHOD /api/trips/{id}/...`）→ 實際觸發過的狀態碼。 */
 const triggered = new Map<string, Set<number>>();
 
@@ -27,6 +44,9 @@ async function call(method: string, tmpl: string, path: string, opts: Opts = {})
     headers: opts.anon ? { Origin: ORIGIN } : undefined,
   });
   const key = `${method} ${tmpl}`;
+  // 成功的請求，送出的 body 也必須符合文件的 body schema（handler 接受 ⇒ 文件不可判定為不合法）
+  const bodySchema = BODIES[key];
+  if (bodySchema && opts.json !== undefined && res.status < 300) expectContract(bodySchema, opts.json);
   if (!triggered.has(key)) triggered.set(key, new Set());
   triggered.get(key)!.add(res.status);
   const text = await res.text();
@@ -80,11 +100,11 @@ beforeAll(async () => {
 });
 afterAll(disposeMiniflare);
 
-const T = '/api/trips/{id}';
 
 describe('days', () => {
   it('GET /days 摘要與 ?all=1', async () => {
     const f = await mk('days-get');
+    expectContract(S.DaysListQuery, { all: '1' });
     const sum = await call('GET', `${T}/days`, `${base(f.id)}/days`, { as: OWNER });
     expect(sum.status).toBe(200);
     expectContract(z.array(S.DaySummary), sum.body);
@@ -165,10 +185,10 @@ describe('days', () => {
 
   const putBody = {
     date: '2030-02-01', dayOfWeek: '五', label: 'Day 1',
-    hotel: { name: 'Put Hotel', lat: 26.2, lng: 127.7, parking: [{ name: 'Put Park' }] },
+    hotel: { name: 'Put Hotel', lat: 26.2, lng: 127.7, category: 'hotel', price: '$$$', hours: '24h', parking: [{ name: 'Put Park' }] },
     timeline: [
       { name: 'Put Spot', start_time: '09:00', end_time: '10:00', note: 'n' },
-      { stopPois: [{ name: 'Put Cafe', type: 'restaurant', reservation: '12:00' }, { name: 'Put Alt', type: 'shopping' }], time: '11:00-12:00' },
+      { stopPois: [{ name: 'Put Cafe', type: 'restaurant', category: 'ramen', reservation: '12:00', rating: 4, lat: 26.2, lng: 127.7 }, { name: 'Put Alt', type: 'shopping' }], time: '11:00-12:00' },
     ],
   };
   it('PUT /days/:num 整天覆寫', async () => {
@@ -208,6 +228,9 @@ describe('days', () => {
   it('POST /days/:num/entries', async () => {
     const f = await mk('daynum-entries');
     const body = { name: 'New Spot', poi_type: 'restaurant', lat: 26.1, lng: 127.6, rating: 4.2, description: 'd', note: 'n', source: 'manual', start_time: '13:00', end_time: '14:00', sort_order: 5 };
+    const legacyTime = await call('POST', `${T}/days/{num}/entries`, `${base(f.id)}/days/1/entries`, { as: OWNER, json: { name: 'Legacy Time', time: '15:00-16:00' } });
+    expect(legacyTime.status).toBe(201);
+    expect(legacyTime.body.startTime).toBe('15:00');
     expectContract(S.EntryCreateBody, body);
     const r = await call('POST', `${T}/days/{num}/entries`, `${base(f.id)}/days/1/entries`, { as: OWNER, json: body });
     expect(r.status).toBe(201);
@@ -273,6 +296,9 @@ describe('entries', () => {
     const cleared = await call('PATCH', `${T}/entries/{eid}`, p, { as: OWNER, json: { start_time: null, end_time: null, description: null } });
     expectContract(S.EntryRow, cleared.body);
     expect(cleared.body.startTime).toBeNull();
+    const legacy = await call('PATCH', `${T}/entries/{eid}`, p, { as: OWNER, json: { time: '11:00-12:00' } });
+    expect(legacy.body.startTime).toBe('11:00');
+    expect(legacy.body.endTime).toBe('12:00');
   });
   it('PATCH /entries/:eid 錯誤', async () => {
     const f = await mk('epatch-err');
@@ -310,7 +336,7 @@ describe('alternates / master / poi-id / pois / trip-pois / copy', () => {
     const r = await call('POST', ALT, p, { as: OWNER, json: { poiId: extra, entryPoisVersion: '0' } });
     expect(r.status).toBe(201);
     expectContract(S.AlternateAddResponse, r.body);
-    const body = { name: 'Searched Place', lat: 26.3, lng: 127.8, type: 'attraction', country: 'JP', source: 'google' };
+    const body = { name: 'Searched Place', lat: 26.3, lng: 127.8, type: 'attraction', category: 'cafe', address: '那霸市牧志 1-1', rating: 4.1, country: 'JP', source: 'google' };
     expectContract(S.AlternateAddBody, body);
     const r2 = await call('POST', ALT, p, { as: OWNER, json: body });
     expect(r2.status).toBe(201);
@@ -418,7 +444,7 @@ describe('alternates / master / poi-id / pois / trip-pois / copy', () => {
     const r = await call('PUT', POIID, p, { as: OWNER, json: { poiId: f.p2 } });
     expect(r.status).toBe(200);
     expectContract(S.PoiIdReplaceResponse, r.body);
-    const body = { name: 'PoiId Place', lat: 26.4, lng: 127.9 };
+    const body = { name: 'PoiId Place', lat: 26.4, lng: 127.9, type: 'attraction', category: 'cafe', address: '那霸市松山 2-2', rating: 3.9, country: 'JP', source: 'google' };
     expectContract(S.PoiIdReplaceBody, body);
     const r2 = await call('PUT', POIID, p, { as: OWNER, json: body });
     expectContract(S.PoiIdReplaceResponse, r2.body);
@@ -477,6 +503,34 @@ describe('alternates / master / poi-id / pois / trip-pois / copy', () => {
   });
 });
 
+
+describe('handler 拒絕的 body，文件的 body schema 也判定不合法', () => {
+  const reject = (schema: z.ZodTypeAny, body: unknown) => {
+    // 用一般 parse（strictify 會丟掉陣列的 .min）
+    expect(schema.safeParse(body).success, JSON.stringify(body)).toBe(false);
+  };
+  it('逐一對照', async () => {
+    const f = await mk('reject');
+    const b = base(f.id);
+    const pairs: Array<[string, string, string, z.ZodTypeAny, unknown]> = [
+      ['POST', `${T}/days`, `${b}/days`, S.DaysCreateBody, { position: 'nope' }],
+      ['POST', `${T}/days/shift`, `${b}/days/shift`, S.DaysShiftBody, { startDate: 'x' }],
+      ['PUT', `${T}/days/{num}`, `${b}/days/1`, S.DayReplaceBody, { date: '2030-02-01', dayOfWeek: '五' }],
+      ['POST', `${T}/days/{num}/entries`, `${b}/days/1/entries`, S.EntryCreateBody, {}],
+      ['PATCH', `${T}/entries/batch`, `${b}/entries/batch`, S.EntriesBatchBody, { updates: [] }],
+      ['PATCH', `${T}/entries/{eid}`, `${b}/entries/${f.e1}`, S.EntryPatchBody, { day_id: -1 }],
+      ['PATCH', `${T}/entries/{eid}/alternates/reorder`, `${b}/entries/${f.e1}/alternates/reorder`, S.AlternateReorderBody, { order: 'x' }],
+      ['POST', `${T}/entries/{eid}/copy`, `${b}/entries/${f.e1}/copy`, S.EntryCopyBody, {}],
+      ['PATCH', `${T}/entries/{eid}/master`, `${b}/entries/${f.e1}/master`, S.EntryMasterBody, {}],
+      ['POST', `${T}/entries/{eid}/trip-pois`, `${b}/entries/${f.e1}/trip-pois`, S.EntryTripPoiBody, { name: 'x' }],
+    ];
+    for (const [m, tmpl, path, schema, body] of pairs) {
+      const r = await call(m, tmpl, path, { as: OWNER, json: body });
+      expect(r.status, `${m} ${tmpl}`).toBe(tmpl.endsWith('/reorder') ? 422 : 400);
+      reject(schema, body);
+    }
+  });
+});
 
 describe('OpenAPI 文件', () => {
   const ROUTES: Array<{ key: string; auth: 'required' | 'optional'; body: boolean }> = [

@@ -5,6 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import { createApp } from '../src/app';
 import type { Env } from '../src/env';
+import { AppError } from '../src/errors';
 
 const WEB = 'https://trip-planner-dby.pages.dev';
 const UAT = 'https://uat.trip-planner-dby.pages.dev';
@@ -14,6 +15,9 @@ function app() {
   const a = createApp();
   a.get('/x', (c) => c.json({ ok: true }));
   a.post('/x', (c) => c.json({ ok: true }));
+  // token／login 這類路由直接回傳原始 Response（不是 c.json），錯誤也可能走 onError
+  a.post('/raw', () => new Response(JSON.stringify({ error: 'invalid_request' }), { status: 400, headers: { 'content-type': 'application/json' } }));
+  a.post('/boom', () => { throw new AppError('DATA_VALIDATION'); });
   return a;
 }
 const get = (origin?: string, e = env()) => app().request('/x', origin === undefined ? {} : { headers: { Origin: origin } }, e);
@@ -70,6 +74,21 @@ describe('CORS 白名單', () => {
 
   it('暴露給 web 讀取的標頭：Retry-After 與 X-Request-Id', async () => {
     expect((await get(WEB)).headers.get('access-control-expose-headers')).toMatch(/Retry-After.*X-Request-Id|X-Request-Id.*Retry-After/);
+  });
+});
+
+describe('實際請求的回應（不只 preflight）一律帶 CORS 標頭——包含原始 Response 與錯誤回應', () => {
+  const post = (path: string) => app().request(path, { method: 'POST', headers: { Origin: WEB } }, env());
+  it.each([['/x', 200], ['/raw', 400], ['/boom', 400]])('POST %s（%i）帶 Allow-Origin、Vary、Expose-Headers', async (path, status) => {
+    const res = await post(path);
+    expect(res.status).toBe(status);
+    expect(res.headers.get('access-control-allow-origin')).toBe(WEB);
+    expect(res.headers.get('vary')).toMatch(/Origin/i);
+    expect(res.headers.get('access-control-expose-headers')).toMatch(/X-Request-Id/);
+  });
+  it('不在白名單的 origin 仍然沒有 CORS 標頭（原始 Response 也一樣）', async () => {
+    const res = await app().request('/raw', { method: 'POST', headers: { Origin: 'https://evil.example' } }, env());
+    expect(res.headers.get('access-control-allow-origin')).toBeNull();
   });
 });
 

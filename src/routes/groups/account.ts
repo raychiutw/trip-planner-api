@@ -1,3 +1,4 @@
+import { z } from '@hono/zod-openapi';
 import type { OpenAPIHono } from '@hono/zod-openapi';
 import type { AppEnv } from '../../env';
 import { legacyRoute } from '../../legacy';
@@ -53,7 +54,7 @@ export function registerAccountRoutes(app: OpenAPIHono<AppEnv>): void {
     method: 'post', path: '/api/account/ai-authorization', auth: 'required', handler: accountAiAuthorizationPost, summary: '授權 Tripline AI',
     docs: { responses: { 200: { description: '建立（或更新）授權；idempotent，永遠回 authorized: true', schema: S.Account_AiAuthorizationStatus }, 401: E401, 403: E403_ACCOUNT } },
   });
-  const E409_CONSENT = { description: 'body 的 version 未知或不是目前版本（AI_CONSENT_VERSION_MISMATCH；error 內帶 currentVersion；不寫入）', schema: S.AiConsentVersionMismatchError };
+  const E409_CONSENT = { description: 'body 的 version 未知或不是目前版本（AI_CONSENT_VERSION_MISMATCH）；或目前版本的說明文字尚未填妥（AI_CONSENT_NOT_READY，GET／DELETE 不受影響）。兩者 error 內都帶 currentVersion，且不寫入', schema: z.union([S.AiConsentVersionMismatchError, S.AiConsentNotReadyError]) };
   legacyRoute(app, {
     method: 'get', path: '/api/account/ai-data-consent', auth: 'required', handler: accountAiDataConsentGet, summary: 'AI 資料同意：狀態與說明文字',
     docs: { responses: { 200: { description: '同意狀態（none／valid／stale／withdrawn）、目前版本、已接受版本與時間、目前版本的說明文字、enforced', schema: S.Account_AiDataConsentState }, 401: E401, 403: E403_ACCOUNT } },

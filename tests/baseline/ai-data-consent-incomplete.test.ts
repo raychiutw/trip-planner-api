@@ -65,6 +65,23 @@ describe('文案', () => {
   });
 });
 
+describe('文案未填妥：POST 不得記錄同意', () => {
+  it('POST → 409 AI_CONSENT_NOT_READY（帶 currentVersion），不寫入事件；GET 與 DELETE 不受影響', async () => {
+    const res = await api.request('POST', '/api/account/ai-data-consent', { as: OWNER, json: { version: 'ai-data-v1' } });
+    expect(res.status).toBe(409);
+    const b = await res.json() as any;
+    expect(b.error.code).toBe('AI_CONSENT_NOT_READY');
+    expect(b.error.currentVersion).toBe('ai-data-v1');
+    const n = await db.prepare('SELECT COUNT(*) AS n FROM ai_data_consent_events').first<{ n: number }>();
+    expect(n!.n).toBe(0);
+    expect((await api.get('/api/account/ai-data-consent', { as: OWNER })).status).toBe(200);
+    expect((await api.request('DELETE', '/api/account/ai-data-consent', { as: OWNER })).status).toBe(200);
+    // 版本不符仍優先回 MISMATCH（不因未就緒而改變）
+    const mm = await api.request('POST', '/api/account/ai-data-consent', { as: OWNER, json: { version: 'ai-data-v999' } });
+    expect(((await mm.json()) as any).error.code).toBe('AI_CONSENT_VERSION_MISMATCH');
+  });
+});
+
 describe('旗標開、文案未完成：不擋', () => {
   it('GET 狀態：enforced=false', async () => {
     const res = await api.get('/api/account/ai-data-consent', { as: OWNER });

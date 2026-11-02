@@ -104,8 +104,9 @@ export async function assertAiConsent(env: Pick<Env, 'DB' | 'AI_CONSENT_ENFORCED
 
 function consentError(code: 'AI_CONSENT_REQUIRED' | 'AI_CONSENT_OWNER_REQUIRED', state: ConsentState): AppError {
   const who = code === 'AI_CONSENT_REQUIRED' ? '你尚未同意' : '行程擁有者尚未同意';
+  // owner 的狀態不揭露給旅伴（只需知道缺的是 owner）；送出者自己的狀態才帶 status
   return new AppError(code, `${who} AI 資料處理（需要版本 ${CURRENT_CONSENT_VERSION}）`, {
     requiredVersion: CURRENT_CONSENT_VERSION,
-    status: state.status,
+    ...(code === 'AI_CONSENT_REQUIRED' ? { status: state.status } : {}),
   });
 }

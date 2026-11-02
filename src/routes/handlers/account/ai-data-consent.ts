@@ -8,14 +8,14 @@
  *                       冪等。只寫呼叫者自己，不吃 body 裡的 userId／client。
  * DELETE → 撤回（冪等）。撤回後新請求立即被拒絕；排隊中尚未開始的請求被終結（ADR-0007，已開始的不保證能停）。
  *
- * 不受旗標與文字是否填妥影響：這三個動作永遠可用，旗標只決定三個受管制入口檢不檢查。
+ * 旗標不影響這三個動作，旗標只決定三個受管制入口檢不檢查。文案未填妥時 POST 回 409 AI_CONSENT_NOT_READY（GET／DELETE 照常）。
  * Auth: requireAccountUser（第一方 client 的 user-bound bearer）。
  */
 import { requireAccountUser } from '../../../lib/account-user';
 import { AppError } from '../../../errors';
 import { parseJsonBody, rawJson } from '../../../lib/utils';
 import { updateRequest } from '../../../lib/request-termination';
-import { currentConsentText, getConsentState, isConsentEnforced, recordAccepted, recordWithdrawn } from '../../../lib/ai-data-consent';
+import { currentConsentText, getConsentState, isConsentEnforced, isConsentTextComplete, recordAccepted, recordWithdrawn } from '../../../lib/ai-data-consent';
 import { CURRENT_CONSENT_VERSION } from '../../../lib/ai-data-consent-text';
 import type { Env } from '../../../env';
 
@@ -35,6 +35,10 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
   if (typeof body?.version !== 'string' || !body.version) throw new AppError('DATA_VALIDATION', '缺少 version');
   if (body.version !== CURRENT_CONSENT_VERSION) {
     throw new AppError('AI_CONSENT_VERSION_MISMATCH', `目前版本是 ${CURRENT_CONSENT_VERSION}`, { currentVersion: CURRENT_CONSENT_VERSION });
+  }
+  // 文案還有待填占位符時不得記錄同意（使用者不能對一份未完成的說明按「同意」）
+  if (!isConsentTextComplete()) {
+    throw new AppError('AI_CONSENT_NOT_READY', '說明文字尚未完成', { currentVersion: CURRENT_CONSENT_VERSION });
   }
   await recordAccepted(context.env.DB, uid);
   return stateResponse(context.env, uid);

@@ -76,6 +76,7 @@ export const ErrorCode = {
   AI_CONSENT_REQUIRED: 'AI_CONSENT_REQUIRED',
   AI_CONSENT_OWNER_REQUIRED: 'AI_CONSENT_OWNER_REQUIRED',
   AI_CONSENT_VERSION_MISMATCH: 'AI_CONSENT_VERSION_MISMATCH',
+  AI_CONSENT_NOT_READY: 'AI_CONSENT_NOT_READY',
 } as const;
 
 export type ErrorCodeType = typeof ErrorCode[keyof typeof ErrorCode];
@@ -137,6 +138,7 @@ export const ERROR_MESSAGES: Record<ErrorCodeType, string> = {
   AI_CONSENT_REQUIRED: '請先同意 AI 資料處理',
   AI_CONSENT_OWNER_REQUIRED: '行程擁有者尚未同意 AI 資料處理',
   AI_CONSENT_VERSION_MISMATCH: 'AI 資料處理說明已更新，請重新確認',
+  AI_CONSENT_NOT_READY: 'AI 資料處理說明尚未完成，暫時無法同意',
 };
 
 // ---------------------------------------------------------------------------

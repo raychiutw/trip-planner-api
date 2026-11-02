@@ -229,7 +229,14 @@ describe.each(ENTRIES)('受管制入口：$name', (entry) => {
     expect(res.status).toBe(403);
     const b = await res.json();
     expectContract(AiConsentGateError, b);
-    expect((b as any).error).toMatchObject({ code, requiredVersion: V, status });
+    if (code === 'AI_CONSENT_OWNER_REQUIRED') {
+      // 旅伴只需知道缺的是 owner，不揭露 owner 是 none／stale／withdrawn
+      expect((b as any).error).toMatchObject({ code, requiredVersion: V });
+      expect((b as any).error).not.toHaveProperty('status');
+      expect(JSON.stringify(b)).not.toMatch(/stale|withdrawn/);
+    } else {
+      expect((b as any).error).toMatchObject({ code, requiredVersion: V, status });
+    }
   };
   const blockedWithoutRows = async (as: string, code: string, status: string) => {
     const before = await entry.count();
@@ -393,6 +400,20 @@ describe('GET /api/requests：對服務 token 省略 submittedBy（email）', ()
     const one = await (await apiOn.get(`/api/requests/${reqId}`, { as: OWNER })).json() as Record<string, unknown>;
     expect(one.submittedBy).toBe(OWNER);
     expect(one.submittedByDisplayName).toBe(OWNER.split('@')[0]);
+  });
+  it('restrict_trip 的使用者 token（agent 的 MCP 實際用的）：列表與單筆都沒有 submittedBy，仍有 submittedByDisplayName', async () => {
+    const restricted = await apiOn.tokenFor(OWNER, ['trips:read', 'trips:write'], { restrictTrip: TRIP });
+    const arr = await (await apiOn.request('GET', `/api/requests?tripId=${TRIP}`, { bearer: restricted })).json() as Array<Record<string, unknown>>;
+    expect(arr.length).toBeGreaterThan(0);
+    for (const r of arr) { expect(r).not.toHaveProperty('submittedBy'); expect(r).toHaveProperty('submittedByDisplayName'); }
+    const page = await (await apiOn.request('GET', `/api/requests?tripId=${TRIP}&limit=50`, { bearer: restricted })).json() as { items: Array<Record<string, unknown>> };
+    for (const r of page.items) expect(r).not.toHaveProperty('submittedBy');
+    const one = await apiOn.request('GET', `/api/requests/${reqId}`, { bearer: restricted });
+    expect(one.status).toBe(200);
+    const ob = await one.json() as Record<string, unknown>;
+    expect(ob).not.toHaveProperty('submittedBy');
+    expect(ob.submittedByDisplayName).toBe(OWNER.split('@')[0]);
+    expect(JSON.stringify([arr, page, ob])).not.toContain('@test.com');
   });
   it('GET /api/requests/:id 對服務 token 仍是 403（沒有任何 email 外洩路徑）', async () => {
     const res = await apiOn.request('GET', `/api/requests/${reqId}`, { bearer: svc });

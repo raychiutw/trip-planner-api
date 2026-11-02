@@ -63,6 +63,7 @@ export const STATUS_MAP: Partial<Record<ErrorCodeType, number>> = {
   AI_CONSENT_REQUIRED: 403,
   AI_CONSENT_OWNER_REQUIRED: 403,
   AI_CONSENT_VERSION_MISMATCH: 409,
+  AI_CONSENT_NOT_READY: 409,
 };
 
 export class AppError extends Error {

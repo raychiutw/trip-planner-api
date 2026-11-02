@@ -6,6 +6,7 @@
  * - notifications／profile／stats／permissions／invitations 走 camelCase（handler 用 json 或自行 stringify）。
  */
 import { z } from '@hono/zod-openapi';
+import { ApiError } from './common';
 
 // ───────── 共用 ─────────
 
@@ -17,6 +18,49 @@ export const Account_Ok = z.object({ ok: z.literal(true) }).openapi('Account_Ok'
 export const Account_AiAuthorizationStatus = z.object({
   authorized: z.boolean().openapi({ description: '目前使用者是否已授權 Tripline AI（tp-request）代為編輯行程' }),
 }).openapi('Account_AiAuthorizationStatus');
+
+// ───────── ai-data-consent（AI 資料同意，ADR-0012） ─────────
+
+export const Account_AiDataConsentText = z.object({
+  version: z.string(),
+  title: z.string(),
+  intro: z.string(),
+  sections: z.array(z.object({ heading: z.string(), items: z.array(z.string()) })),
+  withdrawal: z.array(z.string()).openapi({ description: '撤回的如實說明（新請求立即拒絕、排隊中尚未開始的被終結、已開始的不保證能停、已送出的收不回來）' }),
+}).openapi('Account_AiDataConsentText');
+
+export const Account_AiDataConsentState = z.object({
+  status: z.enum(['none', 'valid', 'stale', 'withdrawn']).openapi({ description: 'none＝從未同意；valid＝已接受目前版本；stale＝接受的是舊版；withdrawn＝已撤回' }),
+  currentVersion: z.string().openapi({ example: 'ai-data-v1' }),
+  acceptedVersion: z.string().nullable().openapi({ description: '已接受的版本（valid／stale）；none／withdrawn 為 null' }),
+  acceptedAt: z.string().nullable().openapi({ description: '接受時間（UTC ISO 8601）；none／withdrawn 為 null' }),
+  text: Account_AiDataConsentText.openapi({ description: '目前版本的說明文字（web 與 Flutter 只顯示這份）' }),
+  enforced: z.boolean().openapi({ description: '三個受管制入口目前是否真的檢查同意（旗標開且文字已填妥）' }),
+}).openapi('Account_AiDataConsentState');
+
+export const Account_AiDataConsentBody = z.object({
+  version: z.string().openapi({ description: '使用者實際看到的同意版本；必須等於目前版本，否則 409 AI_CONSENT_VERSION_MISMATCH', example: 'ai-data-v1' }),
+}).openapi('Account_AiDataConsentBody');
+
+/** 同意閘門的 403／409：error 物件多帶 requiredVersion／status／currentVersion。 */
+export const AiConsentGateError = z.object({
+  error: z.object({
+    code: z.enum(['AI_CONSENT_REQUIRED', 'AI_CONSENT_OWNER_REQUIRED']),
+    message: z.string(),
+    detail: z.string().optional(),
+    requiredVersion: z.string(),
+    status: z.enum(['none', 'valid', 'stale', 'withdrawn']).openapi({ description: '被擋的那一方（送出者或 owner）目前的同意狀態' }),
+  }),
+}).openapi('AiConsentGateError');
+
+export const AiConsentVersionMismatchError = z.object({
+  error: z.object({
+    code: z.literal('AI_CONSENT_VERSION_MISMATCH'),
+    message: z.string(),
+    detail: z.string().optional(),
+    currentVersion: z.string(),
+  }),
+}).openapi('AiConsentVersionMismatchError');
 
 // ───────── connected-apps ─────────
 
@@ -326,3 +370,10 @@ export const Account_PermissionsQuery = z.object({ tripId: z.string().openapi({ 
 
 /** GET /api/invitations 依參數回兩種形狀：?tripId= → { items }；?token= → 預覽。 */
 export const Account_InvitationsGetResponse = z.union([Account_PendingInvitationList, Account_InvitationPreview]).openapi('Account_InvitationsGetResponse');
+
+/** 三個受管制入口（建立請求、行程健檢、AI 筆記生成）的 403：沒有寫權限，或 AI 資料同意未滿足。 */
+export const AiConsentGated403 = {
+  description:
+    '沒有此行程的寫入權限（PERM_DENIED）；或 AI 資料同意未滿足（旗標開且文案填妥才會發生）：送出者未同意 AI_CONSENT_REQUIRED、行程擁有者未同意 AI_CONSENT_OWNER_REQUIRED，error 內帶 requiredVersion 與 status，且不建立請求',
+  schema: z.union([ApiError, AiConsentGateError]),
+};

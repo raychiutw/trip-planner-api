@@ -60,18 +60,24 @@ export const STATUS_MAP: Partial<Record<ErrorCodeType, number>> = {
   NOTES_AI_JOB_STALE: 409,
   NOTES_AI_NOT_REASSIGNABLE: 409,
   NOTES_AI_APPLY_FAILED: 500,
+  AI_CONSENT_REQUIRED: 403,
+  AI_CONSENT_OWNER_REQUIRED: 403,
+  AI_CONSENT_VERSION_MISMATCH: 409,
 };
 
 export class AppError extends Error {
   readonly code: ErrorCodeType;
   readonly status: number;
   readonly detail?: string;
+  /** 4xx 才會輸出的額外欄位（與 code／message／detail 並列在 error 物件內），讓 client 依欄位分流。 */
+  readonly extra?: Record<string, unknown>;
 
-  constructor(code: ErrorCodeType, detail?: string) {
+  constructor(code: ErrorCodeType, detail?: string, extra?: Record<string, unknown>) {
     super(ERROR_MESSAGES[code] || code);
     this.code = code;
     this.status = STATUS_MAP[code] ?? 500;
     this.detail = detail;
+    this.extra = extra;
   }
 }
 
@@ -80,7 +86,8 @@ const JSON_HEADERS = { 'content-type': 'application/json' } as const;
 /** AppError → 巢狀錯誤回應。detail 只給 4xx（5xx 的 detail 可能含 SQL、路徑）。 */
 export function errorResponse(err: AppError): Response {
   const detail = err.status < 500 && err.detail ? err.detail : undefined;
-  return new Response(JSON.stringify({ error: { code: err.code, message: err.message, detail } }), {
+  const extra = err.status < 500 ? err.extra : undefined;
+  return new Response(JSON.stringify({ error: { code: err.code, message: err.message, detail, ...extra } }), {
     status: err.status,
     headers: JSON_HEADERS,
   });

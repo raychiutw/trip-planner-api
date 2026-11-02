@@ -140,6 +140,16 @@ describe('requests', () => {
     expectContract(Requests_ListResponse, body);
   });
 
+  it('GET /api/requests 200（服務 token）：沒有 submittedBy（email），其餘符合文件 schema', async () => {
+    const svc = await serviceToken(db, ['ops:trips:read']);
+    const res = await api.request('GET', '/api/requests?limit=5', { bearer: svc });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { items: Array<Record<string, unknown>> };
+    expectContract(Requests_ListResponse, body);
+    expect(body.items.length).toBeGreaterThan(0);
+    for (const r of body.items) expect(r).not.toHaveProperty('submittedBy');
+  });
+
   it('GET /api/requests 200（分頁）：{ items, hasMore }', async () => {
     const res = await api.get(`/api/requests?tripId=${TRIP}&limit=1&sort=asc`, { as: OWNER });
     expect(res.status).toBe(200);

@@ -72,6 +72,10 @@ export const ErrorCode = {
   NOTES_AI_JOB_STALE: 'NOTES_AI_JOB_STALE',
   NOTES_AI_NOT_REASSIGNABLE: 'NOTES_AI_NOT_REASSIGNABLE',
   NOTES_AI_APPLY_FAILED: 'NOTES_AI_APPLY_FAILED',
+  // AI 資料同意（ADR-0012）
+  AI_CONSENT_REQUIRED: 'AI_CONSENT_REQUIRED',
+  AI_CONSENT_OWNER_REQUIRED: 'AI_CONSENT_OWNER_REQUIRED',
+  AI_CONSENT_VERSION_MISMATCH: 'AI_CONSENT_VERSION_MISMATCH',
 } as const;
 
 export type ErrorCodeType = typeof ErrorCode[keyof typeof ErrorCode];
@@ -130,6 +134,9 @@ export const ERROR_MESSAGES: Record<ErrorCodeType, string> = {
   NOTES_AI_JOB_STALE: '這次生成已逾時，請重新生成',
   NOTES_AI_NOT_REASSIGNABLE: '只有原本由 AI 產生的項目可交還 AI 維護',
   NOTES_AI_APPLY_FAILED: '套用 AI 內容失敗，未變更原有內容',
+  AI_CONSENT_REQUIRED: '請先同意 AI 資料處理',
+  AI_CONSENT_OWNER_REQUIRED: '行程擁有者尚未同意 AI 資料處理',
+  AI_CONSENT_VERSION_MISMATCH: 'AI 資料處理說明已更新，請重新確認',
 };
 
 // ---------------------------------------------------------------------------

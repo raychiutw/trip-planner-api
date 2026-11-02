@@ -2,7 +2,7 @@
  * POST /api/poi-favorites/:id/add-to-trip — 從「收藏」加入指定 trip 的 fast-path。
  *
  * Body（poi-favorites-rename §9 + design D14 — 4-field 純時間驅動）：
- *   { tripId, dayNum, startTime, endTime, companionRequestId? }
+ *   { tripId, dayNum, startTime, endTime }
  *
  * 廢除欄位：position / anchorEntryId（送上 → 400「欄位已廢除」）。
  *
@@ -12,8 +12,6 @@
  *
  * Auth（Phase 3：無全域 admin bypass）：
  *   - V2 user：必須是 favorite owner + 對 tripId 有 hasWritePermission
- *   - companion：requireFavoriteActor(action='add_to_trip')；ownership 用 resolved
- *     userId（submitter）比 favorite.user_id。
  *
  * v2.29.0: travel_* DROPPED, trip_segments 由 /recompute-travel 在背景 fill。
  */
@@ -29,7 +27,7 @@ import {
   pickFavoriteBucketForActor,
   preGateFavoriteThrottle,
   requireFavoriteActor,
-} from '../../../../lib/companion';
+} from '../../../../lib/favorite-actor';
 import { bumpRateLimit, RATE_LIMITS } from '../../../../lib/rate-limit';
 import type { Env, AuthData } from '../../../../env';
 
@@ -38,7 +36,6 @@ interface Body {
   dayNum?: number;
   startTime?: string;
   endTime?: string;
-  companionRequestId?: number;
   // 廢除欄位，存在即 reject
   position?: unknown;
   anchorEntryId?: unknown;
@@ -84,8 +81,8 @@ export const onRequestPost: PagesFunction<Env, 'id'> = async (context) => {
     throw new AppError('DATA_VALIDATION', 'endTime 必填，須為 HH:MM 格式');
   }
 
-  // Resolve effective actor（V2 user 或 companion submitter；gate 失敗 → 401）
-  const actor = await requireFavoriteActor(context, body, 'add_to_trip');
+  // Resolve actor（V2 user；缺 userId → 401）
+  const actor = requireFavoriteActor(context);
 
   // v2.33.105 SEC-2: post-gate bucket — 用 RESOLVED actor，bucket key 與 POST
   // /api/poi-favorites 區隔（自己一池），避免互相吃 quota。
@@ -115,16 +112,7 @@ export const onRequestPost: PagesFunction<Env, 'id'> = async (context) => {
         poi_name: string;
         poi_type: string;
       }>(),
-    actor.isCompanion
-      ? // companion 模式：用 submitter (actor.userId) 對 body.tripId 檢查 write 權限。
-        // 防止 prompt-injected message 將 POI 加進 submitter 沒權限的 trip
-        // （CSO audit finding：原 short-circuit `Promise.resolve(true)` 跳過 tripId guard）。
-        db
-          .prepare("SELECT 1 FROM trip_permissions WHERE user_id = ? AND trip_id = ? AND role != 'viewer'")
-          .bind(actor.userId, tripId)
-          .first()
-          .then((row) => !!row)
-      : hasWritePermission(db, auth!, tripId),
+    hasWritePermission(db, auth!, tripId),
     db
       .prepare('SELECT id FROM trip_days WHERE trip_id = ? AND day_num = ?')
       .bind(tripId, dayNum)
@@ -215,7 +203,6 @@ export const onRequestPost: PagesFunction<Env, 'id'> = async (context) => {
     startTime,
     endTime,
   };
-  if (actor.isCompanion) auditDiff.companionTripId = tripId;
   const { entryId: newEntryId, row } = await createEntry(db, {
     dayId: day.id,
     poi: { id: favorite.poi_id },
@@ -225,9 +212,8 @@ export const onRequestPost: PagesFunction<Env, 'id'> = async (context) => {
     source: 'fast-path',
     placement: insertSortOrder === null ? undefined : { sortOrder: insertSortOrder, shift: true },
     audit: {
-      tripId: actor.isCompanion ? actor.audit.tripId : tripId,
-      changedBy: actor.isCompanion ? actor.audit.changedBy : (auth?.email ?? ''),
-      requestId: actor.requestId,
+      tripId,
+      changedBy: auth?.email ?? '',
       diff: auditDiff,
       defer: (p) => context.waitUntil(p),
     },

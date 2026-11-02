@@ -243,14 +243,11 @@ export const RATE_LIMITS = {
   // 設成 now+lockoutMs，下一次 checkRateLimit 才能 reject。lockoutMs=0 會 collide with
   // bump 時間戳，rate limit 失效。set 60s 對齊 window 1 分鐘節奏。
   SAVED_POIS_WRITE: { maxAttempts: 10, windowMs: 60 * 1000, lockoutMs: 60 * 1000 },
-  // POI favorites write per-user / per-companion-request: 10/min window, 60s lockout.
-  // poi-favorites-rename §3.4 — 與 SAVED_POIS_WRITE 等值；handler 用兩個 bucket key
-  // 形態：`poi-favorites-post:user:${userId}` 與 `poi-favorites-post:companion:${requestId}`，
-  // 配合 D16 bucket 隔離防 companion 攻擊耗光 user web quota。
+  // POI favorites write per-user: 10/min window, 60s lockout.
+  // poi-favorites-rename §3.4 — 與 SAVED_POIS_WRITE 等值；bucket key 形態 `poi-favorites-post:user:${userId}`。
   POI_FAVORITES_WRITE: { maxAttempts: 10, windowMs: 60 * 1000, lockoutMs: 60 * 1000 },
   // v2.33.105 SEC-2：poi-favorites endpoints pre-gate per-IP throttle，防
-  // unauthenticated attacker hammer requireFavoriteActor DB resolve（claim
-  // trip_requests + SELECT users）。寬鬆設定（200/5min/IP），正常 user 完全
+  // unauthenticated attacker hammer poi-favorites 端點。寬鬆設定（200/5min/IP），正常 user 完全
   // 不會打中（人類速度遠低於每秒 1 個 favorite）；攻擊者 100 個 concurrent
   // POST 觸 lock。
   POI_FAVORITES_PRE_GATE_IP: { maxAttempts: 200, windowMs: 5 * 60 * 1000, lockoutMs: 5 * 60 * 1000 },

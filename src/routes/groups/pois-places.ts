@@ -19,10 +19,6 @@ import { onRequestGet as publicConfigGet } from '../handlers/public-config';
  * 這一組的路由登記。
  * 公開端點（對照舊 _middleware.ts）：GET /api/public-config、GET /api/route、GET /api/poi-search 完全公開（'none'）；
  * 其餘一律 'required'。
- *
- * 文件備註：poi-favorites 的四條路由另有 companion（tp-request）專用的分支（header `X-Request-Scope: companion` +
- * `companionRequestId`，以 companion token 代表提交者操作；多出 401 gate 失敗、409 COMPANION_QUOTA_EXCEEDED），
- * 屬內部行為，不寫進一般 client 的文件。companion 的路徑白名單屬舊 middleware，由 requests-ops 組實作。
  */
 const err = (description: string) => ({ description, schema: ApiError });
 const E401 = err('未登入或 token 無效（AUTH_REQUIRED）');

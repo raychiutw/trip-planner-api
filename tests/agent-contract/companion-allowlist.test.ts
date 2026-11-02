@@ -49,23 +49,14 @@ describe('快照中的 companion 工具', () => {
 });
 
 describe('api 白名單 ⊆ agent 工具（反向守衛）', () => {
-  /** 目前 api 比 agent 多放行的項目。新增白名單項目要同時改這裡——這是刻意的摩擦。 */
-  const API_ONLY = [
-    // 讀取：agent 的讀取工具（getTrip／getDay／listRequests／poiSearch）不帶 companion header
-    'GET ^\\/api\\/trips\\/',
-    'GET ^\\/api\\/requests',
-    'GET ^\\/api\\/poi-favorites$',
-    // 請求生命週期：updateRequest 不帶 companion header（走自己的授權）
-    'PATCH ^\\/api\\/requests\\/\\d+$',
-    // 收藏：agent 目前沒有 companion 收藏工具
-    'POST ^\\/api\\/poi-favorites$',
-    'DELETE ^\\/api\\/poi-favorites\\/\\d+$',
-    'POST ^\\/api\\/poi-favorites\\/\\d+\\/add-to-trip$',
-    // trip-pois：agent 目前沒有對應 companion 工具
-    'POST ^\\/api\\/trips\\/[^/]+\\/entries\\/\\d+\\/trip-pois$',
-    'PATCH ^\\/api\\/trips\\/[^/]+\\/trip-pois\\/\\d+$',
-    'DELETE ^\\/api\\/trips\\/[^/]+\\/trip-pois\\/\\d+$',
-  ].sort();
+  /**
+   * 目前 api 比 agent 多放行的項目：**沒有**（2026-11-02 收窄）。白名單恰好等於 agent 的 companion 工具。
+   * 收窄的依據：唯一會送 X-Request-Scope: companion 的程式是 agent 的 MCP server（只對標為 companion 的工具）；
+   * Flutter 與網站都不送；隔離 session 只允許 mcp__tripline__*（Bash 被 deny），所以 skill 文件裡的 curl 流程（收藏等）執行不到。
+   * 新增白名單項目要同時改 fixture（也就是 agent 要先有對應的 companion 工具）——這是刻意的摩擦。
+   * 收藏／trip-pois／讀取 API 本身不受影響：沒帶 companion header 的一般請求照常（它們走各自 handler 的 OAuth scope 與權限檢查）。
+   */
+  const API_ONLY: string[] = [];
 
   it('白名單中沒有任何 companion 工具對應的項目，恰好等於 API_ONLY', () => {
     const paths = contract.companionTools.map((t) => ({ method: t.method, path: concrete(t.path) }));

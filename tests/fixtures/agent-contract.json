@@ -1,0 +1,84 @@
+{
+  "version": 1,
+  "note": "由 scripts/export-api-contract.ts 產生，請勿手改；更新方式見該檔檔頭。",
+  "dailyCheckSql": [
+    {
+      "source": "apiErrors",
+      "sql": [
+        "SELECT path, method, status, COUNT(*) as count, MAX(created_at) as lastOccurred FROM api_logs WHERE created_at >= datetime('now', '-1 day')   AND status >= 400   AND status NOT IN (401, 403, 429)   AND NOT (status = 404 AND path LIKE '/api/trips/%/docs/%')   AND NOT (status = 405 AND source = 'anonymous')   AND NOT (status = 502 AND path = '/api/route' AND error = 'MAPS_UPSTREAM_FAILED: Routes empty result')   AND NOT (status = 502 AND path = '/api/admin/quota-estimate' AND error = 'MAPS_UPSTREAM_FAILED: Google Cloud Monitoring 無法取得用量（GOOGLE_CLOUD_SA_KEY / GOOGLE_CLOUD_PROJECT_ID 未設定或 API 失敗）') GROUP BY path, method, status ORDER BY count DESC"
+      ]
+    },
+    {
+      "source": "auditAnomaly",
+      "sql": [
+        "SELECT changed_by_user_id AS userId, changed_by AS actor, COUNT(*) AS mutations FROM audit_log WHERE created_at >= datetime('now', '-1 day')   AND changed_by_user_id IS NOT NULL GROUP BY changed_by_user_id HAVING COUNT(*) > 200 ORDER BY mutations DESC LIMIT 10",
+        "SELECT trip_id AS tripId, COUNT(*) AS mutations FROM audit_log WHERE created_at >= datetime('now', '-1 day')   AND trip_id != 'system' GROUP BY trip_id HAVING COUNT(*) > 100 ORDER BY mutations DESC LIMIT 10",
+        "SELECT table_name AS tableName, COUNT(*) AS deletes FROM audit_log WHERE created_at >= datetime('now', '-1 day')   AND action = 'delete'   AND table_name IN ('trips', 'users') GROUP BY table_name HAVING COUNT(*) > 10"
+      ]
+    },
+    {
+      "source": "dataHygiene",
+      "sql": [
+        "SELECT te.id, td.trip_id, td.day_num, te.description AS title, tep.note AS note FROM trip_entries te JOIN trip_days td ON te.day_id = td.id LEFT JOIN trip_entry_pois tep ON tep.entry_id = te.id AND tep.sort_order = 1 WHERE te.description LIKE '%TEST_AUTO_UPDATE_PROBE%' OR tep.note LIKE '%TEST_AUTO_UPDATE_PROBE%' OR te.description LIKE '%_PROBE%' OR tep.note LIKE '%_PROBE%' OR te.description LIKE '%AUTO_TEST_FIXTURE%' OR tep.note LIKE '%AUTO_TEST_FIXTURE%' OR te.description LIKE '%__TEST_ONLY__%' OR tep.note LIKE '%__TEST_ONLY__%' LIMIT 50"
+      ]
+    },
+    {
+      "source": "requestErrors",
+      "sql": [
+        "SELECT id, trip_id, status, substr(message, 1, 80) as message, substr(reply, 1, 80) as reply, created_at FROM trip_requests WHERE status != 'completed'   AND NOT (status = 'failed' AND IFNULL(terminal_reason, '') = 'cancelled'     AND COALESCE(updated_at, created_at) < datetime(created_at, '+15 minutes'))   AND created_at >= datetime('now', '-1 day') ORDER BY created_at DESC"
+      ]
+    }
+  ],
+  "companionTools": [
+    {
+      "name": "addAlternate",
+      "method": "POST",
+      "path": "/api/trips/{tripId}/entries/{eid}/alternates"
+    },
+    {
+      "name": "addEntry",
+      "method": "POST",
+      "path": "/api/trips/{tripId}/days/{dayNum}/entries"
+    },
+    {
+      "name": "deleteAlternate",
+      "method": "DELETE",
+      "path": "/api/trips/{tripId}/entries/{eid}/alternates/{poiId}"
+    },
+    {
+      "name": "enrichPoi",
+      "method": "POST",
+      "path": "/api/pois/{id}/enrich"
+    },
+    {
+      "name": "patchEntry",
+      "method": "PATCH",
+      "path": "/api/trips/{tripId}/entries/{eid}"
+    },
+    {
+      "name": "patchPoi",
+      "method": "PATCH",
+      "path": "/api/pois/{id}"
+    },
+    {
+      "name": "recomputeTravel",
+      "method": "POST",
+      "path": "/api/trips/{tripId}/recompute-travel"
+    },
+    {
+      "name": "reorderAlternates",
+      "method": "PATCH",
+      "path": "/api/trips/{tripId}/entries/{eid}/alternates/reorder"
+    },
+    {
+      "name": "setEntryPoi",
+      "method": "PUT",
+      "path": "/api/trips/{tripId}/entries/{eid}/poi-id"
+    },
+    {
+      "name": "swapMaster",
+      "method": "PATCH",
+      "path": "/api/trips/{tripId}/entries/{eid}/master"
+    }
+  ]
+}

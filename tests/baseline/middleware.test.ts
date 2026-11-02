@@ -58,13 +58,13 @@ describe('checkCompanionScope（X-Request-Scope: companion 的路徑白名單）
 
   it('companion: PATCH entry → 放行', () => allowed('PATCH', '/api/trips/test-trip/entries/123'));
 
-  it('companion: POST trip-pois → 放行', () => allowed('POST', '/api/trips/test-trip/entries/1/trip-pois'));
+  it('companion: POST trip-pois → 403（2026-11-02 白名單收窄，非 agent MCP 工具）', () => denied('POST', '/api/trips/test-trip/entries/1/trip-pois'));
 
-  it('companion: PATCH request → 放行', () => allowed('PATCH', '/api/requests/42'));
+  it('companion: PATCH request → 403（2026-11-02 白名單收窄，非 agent MCP 工具）', () => denied('PATCH', '/api/requests/42'));
 
-  it('companion: GET trips → 放行', () => allowed('GET', '/api/trips/test-trip/days/1'));
+  it('companion: GET trips → 403（2026-11-02 白名單收窄，非 agent MCP 工具）', () => denied('GET', '/api/trips/test-trip/days/1'));
 
-  it('companion: GET requests → 放行', () => allowed('GET', '/api/requests?tripId=test'));
+  it('companion: GET requests → 403（2026-11-02 白名單收窄，非 agent MCP 工具）', () => denied('GET', '/api/requests?tripId=test'));
 
   it('companion: PATCH pois → 放行', () => allowed('PATCH', '/api/pois/123'));
 
@@ -96,9 +96,9 @@ describe('checkCompanionScope（X-Request-Scope: companion 的路徑白名單）
 
   it('companion: PUT days → 403', () => denied('PUT', '/api/trips/test-trip/days/1'));
 
-  it('companion: PATCH trip-pois → 放行', () => allowed('PATCH', '/api/trips/test-trip/trip-pois/5'));
+  it('companion: PATCH trip-pois → 403（2026-11-02 白名單收窄，非 agent MCP 工具）', () => denied('PATCH', '/api/trips/test-trip/trip-pois/5'));
 
-  it('companion: DELETE trip-pois → 放行', () => allowed('DELETE', '/api/trips/test-trip/trip-pois/5'));
+  it('companion: DELETE trip-pois → 403（2026-11-02 白名單收窄，非 agent MCP 工具）', () => denied('DELETE', '/api/trips/test-trip/trip-pois/5'));
 
   // 2026-07-28：trip_docs 整條退役（前端不 fetch /docs，checklist/emergency 的 UI
   // 入口 v2.17.17 就移除）。留著這條 companion 放行，agent 想寫行程筆記時就會倒進
@@ -131,7 +131,7 @@ describe('detectSource（api_logs.source 的來源分類）', () => {
     expect(await loggedSource({ 'X-Tripline-Source': 'scheduler', 'X-Request-Scope': 'companion' })).toBe('scheduler');
   });
 
-  it('companion: X-Request-Scope=companion → companion（路徑在白名單內才會往下走；此處 GET /api/trips/ 在白名單）', async () => {
+  it('companion: X-Request-Scope=companion → companion（被白名單擋下的請求也照樣標 companion；此處 GET /api/trips/ 已不在白名單、回 403）', async () => {
     expect(await loggedSource({ 'X-Request-Scope': 'companion' })).toBe('companion');
   });
 

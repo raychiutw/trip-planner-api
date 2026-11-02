@@ -4,6 +4,11 @@
  * tp-request scheduler 帶 `X-Request-Scope: companion` 時，只允許下列 method+path，
  * 防止 prompt injection 把權限升級成任意寫入。這只是「自我設限」的粗篩；
  * 真正的 gate（OAuth scope + clientId）在各 handler 的 requireFavoriteActor 等 helper。
+ *
+ * 2026-11-02 收窄：名單恰好等於 agent 的 MCP server 標為 companion 的 10 個工具（最小權限）。
+ * 移除的 10 項（trip-pois 三個寫入、PATCH /api/requests/:id、三個 GET、收藏四個）沒有任何 companion 呼叫者：
+ * 讀取與 updateRequest 的 MCP 工具不帶 companion header；隔離 session 只能用 MCP 工具，沒有收藏／trip-pois 工具。
+ * 這些 API 對一般（沒帶 companion header）的請求不受影響。
  */
 import type { MiddlewareHandler } from 'hono';
 import { AppError, errorResponse } from '../errors';
@@ -19,18 +24,8 @@ export const COMPANION_ALLOWED: Array<{ method: string; pattern: RegExp }> = [
   { method: 'PUT', pattern: /^\/api\/trips\/[^/]+\/entries\/\d+\/poi-id$/ },
   { method: 'POST', pattern: /^\/api\/trips\/[^/]+\/recompute-travel$/ },
   { method: 'POST', pattern: /^\/api\/pois\/\d+\/enrich$/ },
-  { method: 'POST', pattern: /^\/api\/trips\/[^/]+\/entries\/\d+\/trip-pois$/ },
-  { method: 'PATCH', pattern: /^\/api\/trips\/[^/]+\/trip-pois\/\d+$/ },
-  { method: 'DELETE', pattern: /^\/api\/trips\/[^/]+\/trip-pois\/\d+$/ },
   // PUT /docs 刻意不在名單內（trip_docs 已退役；筆記的正解是 POST /trips/:id/notes/:type/generate）。
-  { method: 'PATCH', pattern: /^\/api\/requests\/\d+$/ },
   { method: 'PATCH', pattern: /^\/api\/pois\/\d+$/ },
-  { method: 'GET', pattern: /^\/api\/trips\// },
-  { method: 'GET', pattern: /^\/api\/requests/ },
-  { method: 'GET', pattern: /^\/api\/poi-favorites$/ },
-  { method: 'POST', pattern: /^\/api\/poi-favorites$/ },
-  { method: 'DELETE', pattern: /^\/api\/poi-favorites\/\d+$/ },
-  { method: 'POST', pattern: /^\/api\/poi-favorites\/\d+\/add-to-trip$/ },
 ];
 
 /** 違規回 403 Response；通過（或不是 companion）回 null。 */

@@ -5,7 +5,7 @@
  * `/api/saved-pois*` 4 條 pattern 改為 `/api/poi-favorites*`（hard cutover，不留
  * alias）。
  *
- * 4 條白名單：
+ * 2026-11-02 起這 4 條已全數移出白名單（最小權限），以下皆預期 403；原本的 4 條為：
  *   GET    /api/poi-favorites
  *   POST   /api/poi-favorites
  *   DELETE /api/poi-favorites/:id
@@ -44,20 +44,20 @@ async function blocked(method: string, path: string): Promise<boolean> {
 }
 
 describe('companion scope — /api/poi-favorites whitelist (§5.3)', () => {
-  it('GET  /api/poi-favorites → 放行', async () => {
-    expect(await blocked('GET', '/api/poi-favorites')).toBe(false);
+  it('GET  /api/poi-favorites → 403（2026-11-02 收窄：收藏不在 agent MCP 工具內）', async () => {
+    expect(await blocked('GET', '/api/poi-favorites')).toBe(true);
   });
 
-  it('POST /api/poi-favorites → 放行', async () => {
-    expect(await blocked('POST', '/api/poi-favorites')).toBe(false);
+  it('POST /api/poi-favorites → 403（2026-11-02 收窄：收藏不在 agent MCP 工具內）', async () => {
+    expect(await blocked('POST', '/api/poi-favorites')).toBe(true);
   });
 
-  it('DELETE /api/poi-favorites/123 → 放行', async () => {
-    expect(await blocked('DELETE', '/api/poi-favorites/123')).toBe(false);
+  it('DELETE /api/poi-favorites/123 → 403（2026-11-02 收窄：收藏不在 agent MCP 工具內）', async () => {
+    expect(await blocked('DELETE', '/api/poi-favorites/123')).toBe(true);
   });
 
-  it('POST /api/poi-favorites/123/add-to-trip → 放行', async () => {
-    expect(await blocked('POST', '/api/poi-favorites/123/add-to-trip')).toBe(false);
+  it('POST /api/poi-favorites/123/add-to-trip → 403（2026-11-02 收窄：收藏不在 agent MCP 工具內）', async () => {
+    expect(await blocked('POST', '/api/poi-favorites/123/add-to-trip')).toBe(true);
   });
 
   it('POST /api/poi-favorites/abc/add-to-trip → 403（id 必須是數字）', async () => {

@@ -21,13 +21,12 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { createTestDb, disposeMiniflare } from './setup';
 import { mockEnv, seedPoi, seedUser, seedTrip } from './helpers';
 import { createApi, type Api } from './http';
-import { mintToken, companionToken, seedTripRequest, cleanupFavorites, TP_REQUEST_CLIENT_ID } from './favorites-http';
+import { mintToken, cleanupFavorites, TP_REQUEST_CLIENT_ID } from './favorites-http';
 import type { Env } from '../../src/env';
 
 const PREFIX = 'favatt-';
 const SUBMITTER_EMAIL = `${PREFIX}submitter@test.com`;
 const TEST_IP = '198.51.100.23';
-const COMPANION = { 'X-Request-Scope': 'companion' };
 
 let db: D1Database;
 let env: Env;
@@ -91,14 +90,6 @@ async function entriesOfDay(day: number) {
     .bind(day)
     .all<{ id: number; sort_order: number; start_time: string | null; end_time: string | null }>();
   return r.results;
-}
-
-async function newTripRequest(): Promise<{ requestId: number }> {
-  const tripId = `${PREFIX}req-trip-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-  await seedTrip(db, { id: tripId, owner: SUBMITTER_EMAIL });
-  const requestId = await seedTripRequest(db, { tripId, submittedBy: SUBMITTER_EMAIL });
-  requestIds.push(requestId);
-  return { requestId };
 }
 
 describe('POST /api/poi-favorites/:id/add-to-trip — restrict_trip containment（回歸；security-auditor HIGH）', () => {
@@ -403,122 +394,3 @@ describe('POST /api/poi-favorites/:id/add-to-trip — §9.6 V2 user happy path',
 
 // --- §9.7 companion ---
 
-describe('POST /api/poi-favorites/:id/add-to-trip — §9.7 companion', () => {
-  it('valid 三 gate + companionRequestId + ownership match → 201 + audit_log companion sentinel', async () => {
-    const tripId = `${PREFIX}9-7`;
-    await seedAddTripFixture({ tripId, ownerEmail: SUBMITTER_EMAIL });
-    const submitterUserRow = await db
-      .prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)')
-      .bind(SUBMITTER_EMAIL)
-      .first<{ id: string }>();
-    const submitterUserId = submitterUserRow!.id;
-    const poiId = await seedPoi(db, { name: `${PREFIX}POI 9-7 companion` });
-    const favRow = await db
-      .prepare('INSERT INTO poi_favorites (user_id, poi_id) VALUES (?, ?) RETURNING id')
-      .bind(submitterUserId, poiId)
-      .first<{ id: number }>();
-    const favId = favRow!.id;
-    const { requestId } = await newTripRequest();
-
-    const resp = await addToTrip(
-      favId,
-      { tripId, dayNum: 1, startTime: '10:00', endTime: '11:00', companionRequestId: requestId },
-      { bearer: await companionToken(env) },
-      COMPANION,
-    );
-    expect(resp.status).toBe(201);
-    const created = await entriesOfDay(await dayId(tripId, 1));
-    expect(created).toHaveLength(1);
-
-    // companion_request_actions 1 row（action='add_to_trip'）
-    const actions = await db
-      .prepare('SELECT action FROM companion_request_actions WHERE request_id = ?')
-      .bind(requestId)
-      .all<{ action: string }>();
-    expect(actions.results).toHaveLength(1);
-    expect(actions.results[0]!.action).toBe('add_to_trip');
-
-    // audit_log companion sentinel
-    const audit = await db
-      .prepare(
-        `SELECT changed_by, trip_id FROM audit_log
-         WHERE table_name = 'trip_entries' AND request_id = ? ORDER BY id DESC LIMIT 1`,
-      )
-      .bind(requestId)
-      .first<{ changed_by: string; trip_id: string }>();
-    expect(audit).not.toBeNull();
-    expect(audit!.changed_by).toBe(`companion:${requestId}`);
-    expect(audit!.trip_id).toBe('system:companion');
-  });
-
-  it('CSO finding fix: companion 送 tripId X，submitter 沒 write to X → 403（防 prompt-injected cross-trip）', async () => {
-    // Setup：submitter own 一個 trip A（用來建 trip_request）；建另一個 trip B
-    // 由別人 own，submitter 無權限。Companion 嘗試把收藏加進 B → 應 403。
-    const foreignTripId = `${PREFIX}foreign-${Date.now()}`;
-    await seedAddTripFixture({ tripId: foreignTripId, ownerEmail: `${PREFIX}foreign-owner@test.com` });
-
-    const submitterUserRow = await db
-      .prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)')
-      .bind(SUBMITTER_EMAIL)
-      .first<{ id: string }>();
-    const submitterUserId = submitterUserRow!.id;
-    const poiId = await seedPoi(db, { name: `${PREFIX}POI cross-trip guard` });
-    const favRow = await db
-      .prepare('INSERT INTO poi_favorites (user_id, poi_id) VALUES (?, ?) RETURNING id')
-      .bind(submitterUserId, poiId)
-      .first<{ id: number }>();
-    const favId = favRow!.id;
-
-    // trip_request 對應 submitter 自己的 trip（合法 context）
-    const { requestId } = await newTripRequest();
-
-    // 攻擊：body.tripId 改成 foreignTripId（submitter 沒 write 權限）
-    const resp = await addToTrip(
-      favId,
-      { tripId: foreignTripId, dayNum: 1, startTime: '10:00', endTime: '11:00', companionRequestId: requestId },
-      { bearer: await companionToken(env) },
-      COMPANION,
-    );
-    // 預期 403 PERM_DENIED（submitter 對 foreignTripId 無寫入權限）
-    expect(resp.status).toBe(403);
-    expect(await entriesOfDay(await dayId(foreignTripId, 1))).toHaveLength(0);
-  });
-
-  it('companion 帶別人的收藏 → 403（ownership 以 submitter 為準），不建立 entry', async () => {
-    const tripId = `${PREFIX}9-7-not-mine`;
-    await seedAddTripFixture({ tripId, ownerEmail: SUBMITTER_EMAIL });
-    const { favId } = await seedFavorite({ email: `${PREFIX}9-7-victim@test.com` });
-    const { requestId } = await newTripRequest();
-
-    const resp = await addToTrip(
-      favId,
-      { tripId, dayNum: 1, startTime: '10:00', endTime: '11:00', companionRequestId: requestId },
-      { bearer: await companionToken(env) },
-      COMPANION,
-    );
-    expect(resp.status).toBe(403);
-    expect(await entriesOfDay(await dayId(tripId, 1))).toHaveLength(0);
-  });
-
-  it('companion gate 失敗（缺 scope／clientId 不對）→ 401，不建立 entry', async () => {
-    const tripId = `${PREFIX}9-7-gate`;
-    await seedAddTripFixture({ tripId, ownerEmail: SUBMITTER_EMAIL });
-    const submitterUserId = (await db
-      .prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)')
-      .bind(SUBMITTER_EMAIL)
-      .first<{ id: string }>())!.id;
-    const poiId = await seedPoi(db, { name: `${PREFIX}POI 9-7 gate` });
-    const fav = await db
-      .prepare('INSERT INTO poi_favorites (user_id, poi_id) VALUES (?, ?) RETURNING id')
-      .bind(submitterUserId, poiId)
-      .first<{ id: number }>();
-    const { requestId } = await newTripRequest();
-    const body = { tripId, dayNum: 1, startTime: '10:00', endTime: '11:00', companionRequestId: requestId };
-
-    const noScope = await addToTrip(fav!.id, body, { bearer: await companionToken(env, { scopes: ['admin'] }) }, COMPANION);
-    expect(noScope.status).toBe(401);
-    const wrongClient = await addToTrip(fav!.id, body, { bearer: await companionToken(env, { clientId: 'rogue-cli' }) }, COMPANION);
-    expect(wrongClient.status).toBe(401);
-    expect(await entriesOfDay(await dayId(tripId, 1))).toHaveLength(0);
-  });
-});

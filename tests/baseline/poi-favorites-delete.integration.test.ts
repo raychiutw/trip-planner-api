@@ -15,15 +15,14 @@
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { createTestDb, disposeMiniflare } from './setup';
-import { mockEnv, seedPoi, seedUser, seedTrip } from './helpers';
+import { mockEnv, seedPoi, seedUser } from './helpers';
 import { createApi, type Api } from './http';
-import { mintToken, companionToken, seedTripRequest, cleanupFavorites, TP_REQUEST_CLIENT_ID } from './favorites-http';
+import { mintToken, cleanupFavorites, TP_REQUEST_CLIENT_ID } from './favorites-http';
 import type { Env } from '../../src/env';
 
 const PREFIX = 'favdel-';
 const SUBMITTER_EMAIL = `${PREFIX}submitter@test.com`;
 const TEST_IP = '198.51.100.22';
-const COMPANION = { 'X-Request-Scope': 'companion' };
 
 let db: D1Database;
 let env: Env;
@@ -57,14 +56,6 @@ function del(id: number | string, auth: Auth, headers: Record<string, string> = 
     headers: { 'CF-Connecting-IP': TEST_IP, ...headers },
     ...auth,
   });
-}
-
-async function newTripRequest(): Promise<number> {
-  const tripId = `${PREFIX}trip-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-  await seedTrip(db, { id: tripId, owner: SUBMITTER_EMAIL });
-  const id = await seedTripRequest(db, { tripId, submittedBy: SUBMITTER_EMAIL });
-  requestIds.push(id);
-  return id;
 }
 
 async function seedPoiFavorite(userId: string, poiId: number): Promise<number> {
@@ -187,148 +178,3 @@ describe('DELETE /api/poi-favorites/:id — §8.1 V2 user', () => {
   // 已移除：「無 auth 且無 Origin → 403（CSRF 閘）」——新 api 沒有 cookie session／CSRF 閘（行為變更）；匿名請求一律 401，已由上一條涵蓋。
 });
 
-// ----- §8.2 companion happy path -----
-
-describe('DELETE /api/poi-favorites/:id — §8.2 companion', () => {
-  it('companion 三 gate + 對應 submitter own row → 204 + audit + companion_request_actions favorite_delete', async () => {
-    const requestId = await newTripRequest();
-    const submitterUserRow = await db
-      .prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)')
-      .bind(SUBMITTER_EMAIL)
-      .first<{ id: string }>();
-    const submitterUserId = submitterUserRow!.id;
-
-    const poiId = await seedPoi(db, { name: `${PREFIX}companion delete POI` });
-    const favId = await seedPoiFavorite(submitterUserId, poiId);
-
-    const resp = await del(favId, { bearer: await companionToken(env) }, COMPANION, { companionRequestId: requestId });
-    expect(resp.status).toBe(204);
-
-    // spec §2.1：soft-delete — row 保留但 deleted_at 已寫、且不在 active 查詢內。
-    const after = await db
-      .prepare('SELECT deleted_at FROM poi_favorites WHERE id = ?')
-      .bind(favId)
-      .first<{ deleted_at: string | null }>();
-    expect(after?.deleted_at).not.toBeNull();
-    expect(typeof after?.deleted_at).toBe('string'); // row 仍在（非 hard delete）且有 tombstone
-    const active = await db
-      .prepare('SELECT id FROM poi_favorites WHERE id = ? AND deleted_at IS NULL')
-      .bind(favId)
-      .first();
-    expect(active).toBeNull();
-
-    // companion_request_actions 1 row（action='favorite_delete'）
-    const actions = await db
-      .prepare('SELECT action FROM companion_request_actions WHERE request_id = ?')
-      .bind(requestId)
-      .all<{ action: string }>();
-    expect(actions.results).toHaveLength(1);
-    expect(actions.results[0]!.action).toBe('favorite_delete');
-
-    // audit_log 1 row
-    const audit = await db
-      .prepare(
-        `SELECT changed_by, trip_id, action FROM audit_log
-         WHERE record_id = ? AND table_name = 'poi_favorites' ORDER BY id DESC LIMIT 1`,
-      )
-      .bind(favId)
-      .first<{ changed_by: string; trip_id: string; action: string }>();
-    expect(audit).not.toBeNull();
-    expect(audit!.changed_by).toBe(`companion:${requestId}`);
-    expect(audit!.trip_id).toBe('system:companion');
-    expect(audit!.action).toBe('delete');
-  });
-
-  it('companion 同 requestId 第 2 次刪除 → 409 COMPANION_QUOTA_EXCEEDED，第二筆收藏不被刪', async () => {
-    const requestId = await newTripRequest();
-    const submitterUserId = (await db
-      .prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)')
-      .bind(SUBMITTER_EMAIL)
-      .first<{ id: string }>())!.id;
-    const fav1 = await seedPoiFavorite(submitterUserId, await seedPoi(db, { name: `${PREFIX}quota POI 1` }));
-    const fav2 = await seedPoiFavorite(submitterUserId, await seedPoi(db, { name: `${PREFIX}quota POI 2` }));
-    const bearer = await companionToken(env);
-
-    expect((await del(fav1, { bearer }, COMPANION, { companionRequestId: requestId })).status).toBe(204);
-    const second = await del(fav2, { bearer }, COMPANION, { companionRequestId: requestId });
-    expect(second.status).toBe(409);
-    const json = await second.json() as { error: { code: string } };
-    expect(json.error.code).toBe('COMPANION_QUOTA_EXCEEDED');
-    const still = await db.prepare('SELECT id FROM poi_favorites WHERE id = ? AND deleted_at IS NULL').bind(fav2).first();
-    expect(still).not.toBeNull();
-  });
-});
-
-// ----- §8.3 companion 越權 -----
-
-describe('DELETE /api/poi-favorites/:id — §8.3 companion 越權', () => {
-  it('companion 試刪別 user 的收藏 → fail-closed 401', async () => {
-    const requestId = await newTripRequest();
-    // 別 user 的收藏
-    const otherUserId = await seedUser(db, `${PREFIX}other-victim@test.com`);
-    const poiId = await seedPoi(db, { name: `${PREFIX}victim POI` });
-    const favId = await seedPoiFavorite(otherUserId, poiId);
-
-    const resp = await del(favId, { bearer: await companionToken(env) }, COMPANION, { companionRequestId: requestId });
-    // companion resolves to submitter (test user)，但 row.user_id 是 other-victim
-    // ownership 不符 → 403（PERM_DENIED）。spec wording 是 401（fail-closed），但 V2
-    // user 路徑用 PERM_DENIED 一致。實作測試對齊現行 PERM_DENIED 慣例。
-    expect([401, 403]).toContain(resp.status);
-
-    const still = await db.prepare('SELECT id FROM poi_favorites WHERE id = ? AND deleted_at IS NULL').bind(favId).first();
-    expect(still).not.toBeNull();
-  });
-
-  it('companion clientId 不對 → 401，收藏不被刪', async () => {
-    const requestId = await newTripRequest();
-    const submitterUserId = (await db
-      .prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)')
-      .bind(SUBMITTER_EMAIL)
-      .first<{ id: string }>())!.id;
-    const favId = await seedPoiFavorite(submitterUserId, await seedPoi(db, { name: `${PREFIX}rogue client POI` }));
-
-    const resp = await del(
-      favId,
-      { bearer: await companionToken(env, { clientId: 'rogue-cli' }) },
-      COMPANION,
-      { companionRequestId: requestId },
-    );
-    expect(resp.status).toBe(401);
-    const still = await db.prepare('SELECT id FROM poi_favorites WHERE id = ? AND deleted_at IS NULL').bind(favId).first();
-    expect(still).not.toBeNull();
-  });
-
-  it('companion 請求已非 processing（completed）→ 401，收藏不被刪', async () => {
-    const tripId = `${PREFIX}trip-completed-${Date.now()}`;
-    await seedTrip(db, { id: tripId, owner: SUBMITTER_EMAIL });
-    const requestId = await seedTripRequest(db, { tripId, submittedBy: SUBMITTER_EMAIL, status: 'completed' });
-    requestIds.push(requestId);
-    const submitterUserId = (await db
-      .prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)')
-      .bind(SUBMITTER_EMAIL)
-      .first<{ id: string }>())!.id;
-    const favId = await seedPoiFavorite(submitterUserId, await seedPoi(db, { name: `${PREFIX}completed POI` }));
-
-    const resp = await del(favId, { bearer: await companionToken(env) }, COMPANION, { companionRequestId: requestId });
-    expect(resp.status).toBe(401);
-    const still = await db.prepare('SELECT id FROM poi_favorites WHERE id = ? AND deleted_at IS NULL').bind(favId).first();
-    expect(still).not.toBeNull();
-  });
-
-  it('companion gate 失敗（缺 OAuth scope）→ 401', async () => {
-    const requestId = await newTripRequest();
-    const userId = await seedUser(db, `${PREFIX}self-rep@test.com`);
-    const poiId = await seedPoi(db, { name: `${PREFIX}self-rep POI` });
-    const favId = await seedPoiFavorite(userId, poiId);
-
-    const resp = await del(
-      favId,
-      { bearer: await companionToken(env, { scopes: ['admin'] }) }, // self-reported header, no OAuth scope
-      COMPANION,
-      { companionRequestId: requestId },
-    );
-    expect(resp.status).toBe(401);
-    const still = await db.prepare('SELECT id FROM poi_favorites WHERE id = ? AND deleted_at IS NULL').bind(favId).first();
-    expect(still).not.toBeNull();
-  });
-});

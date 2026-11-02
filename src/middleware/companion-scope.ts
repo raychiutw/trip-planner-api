@@ -3,16 +3,14 @@
  *
  * tp-request scheduler 帶 `X-Request-Scope: companion` 時，只允許下列 method+path，
  * 防止 prompt injection 把權限升級成任意寫入。這只是「自我設限」的粗篩；
- * 真正的 gate（OAuth scope + clientId）在各 handler 的 requireFavoriteActor 等 helper。
+ * 真正的 gate 是 OAuth scope（companion）與各 handler 自身的權限檢查。
  *
  * 2026-11-02 收窄：名單恰好等於 agent 的 MCP server 標為 companion 的 10 個工具（最小權限）。
  * 移除的 10 項（trip-pois 三個寫入、PATCH /api/requests/:id、三個 GET、收藏四個）沒有任何 companion 呼叫者：
  * 讀取與 updateRequest 的 MCP 工具不帶 companion header；隔離 session 只能用 MCP 工具，沒有收藏／trip-pois 工具。
  * 這些 API 對一般（沒帶 companion header）的請求不受影響。
  */
-import type { MiddlewareHandler } from 'hono';
 import { AppError, errorResponse } from '../errors';
-import type { AppEnv } from '../env';
 
 export const COMPANION_ALLOWED: Array<{ method: string; pattern: RegExp }> = [
   { method: 'POST', pattern: /^\/api\/trips\/[^/]+\/days\/\d+\/entries$/ },
@@ -36,9 +34,3 @@ export function companionViolation(request: Request): Response | null {
   if (COMPANION_ALLOWED.some((r) => r.method === method && r.pattern.test(path))) return null;
   return errorResponse(new AppError('PERM_DENIED', '此操作超出旅伴請求範圍'));
 }
-
-export const companionScope: MiddlewareHandler<AppEnv> = async (c, next) => {
-  const denied = companionViolation(c.req.raw);
-  if (denied) return denied;
-  await next();
-};

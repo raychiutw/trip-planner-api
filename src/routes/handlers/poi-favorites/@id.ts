@@ -1,25 +1,14 @@
 /**
  * DELETE /api/poi-favorites/:id — 移除收藏
  *
- * 僅允許 owner（resolved userId 相符）刪除；他人 → 403；不存在 → 404。（Phase 3：無 admin bypass）
- *
- * Companion 分支（poi-favorites-rename §8）：
- *   - body { companionRequestId } + header X-Request-Scope: companion
- *   - 走 requireFavoriteActor(action='favorite_delete')：寫 companion_request_actions
- *     UNIQUE 衝突 → 409 COMPANION_QUOTA_EXCEEDED；gate 失敗 → 401
- *   - companion 模式 ownership 用 resolved userId（submitter）比 row.user_id
- *   - 成功刪除寫 audit_log（changedBy='companion:<id>', tripId='system:companion'）
+ * 僅允許 owner（auth.userId 相符）刪除；他人 → 403；不存在 → 404。（Phase 3：無 admin bypass）
  */
 import { AppError } from '../../../errors';
 import { logAudit } from '../../../lib/audit';
-import { parseIntParam, parseJsonBody } from '../../../lib/utils';
+import { parseIntParam } from '../../../lib/utils';
 import { assertNotTripRestricted } from '../../../lib/permissions';
-import { assertFavoriteOwnership, preGateFavoriteThrottle, requireFavoriteActor } from '../../../lib/companion';
+import { assertFavoriteOwnership, preGateFavoriteThrottle, requireFavoriteActor } from '../../../lib/favorite-actor';
 import type { Env, AuthData } from '../../../env';
-
-interface DeleteBody {
-  companionRequestId?: number;
-}
 
 export const onRequestDelete: PagesFunction<Env, 'id'> = async (context) => {
   const auth = (context.data as { auth?: AuthData }).auth ?? null;
@@ -32,15 +21,8 @@ export const onRequestDelete: PagesFunction<Env, 'id'> = async (context) => {
   const preGate = await preGateFavoriteThrottle(context.env, context.request);
   if (preGate) return preGate;
 
-  // body 為 optional（V2 user DELETE 通常無 body）。companion 模式需要 companionRequestId。
-  let body: DeleteBody | null = null;
-  const headerScope = context.request.headers.get('X-Request-Scope');
-  if (headerScope === 'companion') {
-    body = await parseJsonBody<DeleteBody>(context.request).catch(() => ({} as DeleteBody));
-  }
-
-  // resolve effective actor（companion → submitter；V2 user → auth.userId；否則 401）
-  const actor = await requireFavoriteActor(context, body, 'favorite_delete');
+  // resolve actor（V2 user → auth.userId；否則 401）
+  const actor = requireFavoriteActor(context);
 
   const row = await context.env.DB
     .prepare('SELECT user_id, deleted_at FROM poi_favorites WHERE id = ?')
@@ -63,16 +45,14 @@ export const onRequestDelete: PagesFunction<Env, 'id'> = async (context) => {
     .bind(id)
     .run();
 
-  // v2.33.100 CR-5: V2-user DELETE 也寫 audit (對齊 INSERT 對稱) — 之前只有
-  // companion path log，V2-user 刪掉 favorite 無 forensic trail。
+  // v2.33.100 CR-5: V2-user DELETE 寫 audit（forensic trail）。
   context.waitUntil(
     logAudit(context.env.DB, {
-      tripId: actor.isCompanion ? actor.audit.tripId : 'user',
+      tripId: 'user',
       tableName: 'poi_favorites',
       recordId: id,
       action: 'delete',
-      changedBy: actor.isCompanion ? actor.audit.changedBy : (auth?.email ?? 'unknown'),
-      ...(actor.isCompanion ? { requestId: actor.requestId } : {}),
+      changedBy: auth?.email ?? 'unknown',
     }),
   );
 

@@ -29,9 +29,6 @@ export const ErrorCode = {
   // 上游未真正回應，成因不必然是 user 操作過頻，故與 SYS_RATE_LIMIT 分離，避免誤導
   // telemetry 分桶與 user copy。
   SYS_UPSTREAM_UNAVAILABLE: 'SYS_UPSTREAM_UNAVAILABLE',
-  // Companion path（poi-favorites-rename §4 / §6.3）
-  // companion_request_actions UNIQUE 衝突 → 同 requestId 同 action 重複呼叫
-  COMPANION_QUOTA_EXCEEDED: 'COMPANION_QUOTA_EXCEEDED',
   // Google Maps Platform (v2.23.0 google-maps-migration)
   MAPS_LOCKED: 'MAPS_LOCKED',
   MAPS_UPSTREAM_FAILED: 'MAPS_UPSTREAM_FAILED',
@@ -97,7 +94,6 @@ export const ERROR_MESSAGES: Record<ErrorCodeType, string> = {
   SYS_DB_ERROR: '資料庫忙碌中，請稍後再試',
   SYS_RATE_LIMIT: '操作太頻繁，請稍等',
   SYS_UPSTREAM_UNAVAILABLE: '伺服器暫時無法回應，請稍後重試',
-  COMPANION_QUOTA_EXCEEDED: '此請求已執行過此操作',
   MAPS_LOCKED: '本月 Google API 已達配額，月初恢復',
   MAPS_UPSTREAM_FAILED: 'Google Maps 服務暫時無法回應，請稍後再試',
   MAPS_CONFIG: 'Google Maps API 設定錯誤，請聯絡管理員',

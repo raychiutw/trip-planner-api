@@ -18,9 +18,9 @@
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { createTestDb, disposeMiniflare } from './setup';
-import { mockEnv, seedPoi, seedUser, seedTrip, userIdFor } from './helpers';
+import { mockEnv, seedPoi, seedUser, userIdFor } from './helpers';
 import { createApi, type Api } from './http';
-import { mintToken, companionToken, seedTripRequest, cleanupFavorites, TP_REQUEST_CLIENT_ID } from './favorites-http';
+import { mintToken, cleanupFavorites, TP_REQUEST_CLIENT_ID } from './favorites-http';
 import type { Env } from '../../src/env';
 
 const PREFIX = 'favpost-';
@@ -63,15 +63,6 @@ function post(body: Record<string, unknown>, auth: Auth, headers: Record<string,
   return api.request('POST', URL_POST, { json: body, headers: { 'CF-Connecting-IP': TEST_IP, ...headers }, ...auth });
 }
 
-const COMPANION = { 'X-Request-Scope': 'companion' };
-
-async function newTripRequest(status?: string): Promise<number> {
-  const tripId = `${PREFIX}trip-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-  await seedTrip(db, { id: tripId, owner: SUBMITTER_EMAIL });
-  const id = await seedTripRequest(db, { tripId, submittedBy: SUBMITTER_EMAIL, status });
-  requestIds.push(id);
-  return id;
-}
 
 describe('POST /api/poi-favorites — restrict_trip containment（回歸；security-auditor HIGH）', () => {
   it('受限 token 寫收藏 → 403（favorites user-scoped，restrict token 不可碰）', async () => {
@@ -224,122 +215,6 @@ describe('POST /api/poi-favorites — §6.1 V2 user', () => {
   });
 });
 
-// ----- §6.2 companion 成功 -----
-
-describe('POST /api/poi-favorites — §6.2 companion happy path', () => {
-  it('valid companion 三 gate + companionRequestId → 201 + audit_log + companion_request_actions', async () => {
-    const requestId = await newTripRequest();
-    const resp = await post(
-      { companionRequestId: requestId, poiId: poiBase, note: 'companion add' },
-      { bearer: await companionToken(env) },
-      COMPANION,
-    );
-    expect(resp.status).toBe(201);
-    const row = await resp.json() as { id: number; userId: string; poiId: number };
-    expect(row.id).toBeGreaterThan(0);
-    expect(row.poiId).toBe(poiBase);
-
-    // user_id 應對映 trip_requests.submitted_by → users.id
-    const expected = await db
-      .prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)')
-      .bind(SUBMITTER_EMAIL)
-      .first<{ id: string }>();
-    expect(row.userId).toBe(expected!.id);
-
-    // companion_request_actions 1 row（直查 D1 — 不過 json() camelCase 轉換）
-    const actions = await db
-      .prepare('SELECT action, poi_id FROM companion_request_actions WHERE request_id = ?')
-      .bind(requestId)
-      .all<{ action: string; poi_id: number | null }>();
-    expect(actions.results).toHaveLength(1);
-    expect(actions.results[0]!.action).toBe('favorite_create');
-    expect(actions.results[0]!.poi_id).toBe(poiBase);
-
-    // audit_log 多 1 row
-    const audit = await db
-      .prepare(
-        `SELECT changed_by, trip_id, action, record_id, request_id FROM audit_log
-         WHERE record_id = ? AND table_name = 'poi_favorites' ORDER BY id DESC LIMIT 1`,
-      )
-      .bind(row.id)
-      .first<{ changed_by: string; trip_id: string; action: string; record_id: number; request_id: number }>();
-    expect(audit).not.toBeNull();
-    expect(audit!.changed_by).toBe(`companion:${requestId}`);
-    expect(audit!.trip_id).toBe('system:companion');
-    expect(audit!.action).toBe('insert');
-    expect(audit!.request_id).toBe(requestId);
-  });
-
-  it('companion 請求已非 processing（completed）→ 401 且不寫入收藏', async () => {
-    const requestId = await newTripRequest('completed');
-    const resp = await post(
-      { companionRequestId: requestId, poiId: poiBase },
-      { bearer: await companionToken(env) },
-      COMPANION,
-    );
-    expect(resp.status).toBe(401);
-    const stored = await db
-      .prepare('SELECT id FROM poi_favorites WHERE poi_id = ? AND user_id = (SELECT id FROM users WHERE email = ?)')
-      .bind(poiBase, SUBMITTER_EMAIL)
-      .first();
-    expect(stored).toBeNull();
-    const audit = await db
-      .prepare(`SELECT companion_failure_reason FROM audit_log WHERE trip_id = 'system:companion' AND request_id = ? ORDER BY id DESC LIMIT 1`)
-      .bind(requestId)
-      .first<{ companion_failure_reason: string }>();
-    expect(audit!.companion_failure_reason).toBe('status_completed');
-  });
-});
-
-// ----- §6.3 companion quota -----
-
-describe('POST /api/poi-favorites — §6.3 companion quota', () => {
-  it('同 requestId 同 action 第 2 次（不同 poiId）→ 409 COMPANION_QUOTA_EXCEEDED', async () => {
-    const requestId = await newTripRequest();
-    const poi2 = await seedPoi(db, { name: `${PREFIX}companion second poi` });
-    const bearer = await companionToken(env);
-
-    // 第 1 次 favorite_create — 應成功
-    const r1 = await post({ companionRequestId: requestId, poiId: poiBase }, { bearer }, COMPANION);
-    expect(r1.status).toBe(201);
-
-    // 第 2 次（不同 poi）→ companion_request_actions UNIQUE → 409 COMPANION_QUOTA_EXCEEDED
-    const r2 = await post({ companionRequestId: requestId, poiId: poi2 }, { bearer }, COMPANION);
-    expect(r2.status).toBe(409);
-    const json = await r2.json() as { error: { code: string } };
-    expect(json.error.code).toBe('COMPANION_QUOTA_EXCEEDED');
-    const second = await db
-      .prepare('SELECT id FROM poi_favorites WHERE poi_id = ?')
-      .bind(poi2)
-      .first();
-    expect(second).toBeNull();
-  });
-});
-
-// ----- §6.4 service token 無 companion gate → 401 -----
-
-describe('POST /api/poi-favorites — §6.4 service token without companion gate', () => {
-  it('service token 缺 companion scope → fail-closed 401', async () => {
-    const requestId = await newTripRequest();
-    const resp = await post(
-      { companionRequestId: requestId, poiId: poiBase },
-      { bearer: await companionToken(env, { scopes: ['admin'] }) }, // 缺 companion
-      COMPANION,
-    );
-    expect(resp.status).toBe(401);
-  });
-
-  it('service token clientId 不對 → fail-closed 401', async () => {
-    const requestId = await newTripRequest();
-    const resp = await post(
-      { companionRequestId: requestId, poiId: poiBase },
-      { bearer: await companionToken(env, { clientId: 'rogue-cli' }) },
-      COMPANION,
-    );
-    expect(resp.status).toBe(401);
-  });
-});
-
 // ----- §6.5 SQL injection 防護 -----
 
 describe('POST /api/poi-favorites — §6.5 SQL injection on note', () => {
@@ -359,67 +234,3 @@ describe('POST /api/poi-favorites — §6.5 SQL injection on note', () => {
   });
 });
 
-// ----- §6.7 burst concurrent → mix 201 / 409 / 429 -----
-
-describe('POST /api/poi-favorites — §6.7 burst concurrent companion', () => {
-  it('100 burst concurrent 同 requestId → companion_request_actions UNIQUE 防護（v2.33.105 SEC-2 post-gate bucket order）', async () => {
-    const requestId = await newTripRequest();
-    // 100 個不同 poiId（避免 V2 user UNIQUE 撞）
-    const poiIds: number[] = [];
-    for (let i = 0; i < 100; i++) {
-      poiIds.push(await seedPoi(db, { name: `${PREFIX}Burst POI ${i}` }));
-    }
-
-    const bearer = await companionToken(env);
-    const promises: Promise<Response>[] = [];
-    for (let i = 0; i < 100; i++) {
-      promises.push(post({ companionRequestId: requestId, poiId: poiIds[i] }, { bearer }, COMPANION));
-    }
-
-    const responses = await Promise.all(promises);
-    const statuses = responses.map((r) => r.status);
-    const counts = statuses.reduce<Record<number, number>>(
-      (acc, s) => ({ ...acc, [s]: (acc[s] ?? 0) + 1 }),
-      {},
-    );
-
-    // v2.33.105 SEC-2: actor resolve 順序前移，per-requestId bucket bump 改在
-    // resolve 之後。100 個同 (requestId, action='favorite_create') concurrent →
-    // companion_request_actions UNIQUE 在第一個 INSERT 之後鎖死，後續 99 個 throw
-    // COMPANION_QUOTA_EXCEEDED → 409。100 < 200 pre-gate IP 不會觸 429。
-    expect(counts[201] ?? 0).toBe(1);
-    expect(counts[409] ?? 0).toBe(99);
-    // 不應全部 201（會破壞 quota 防護）
-    expect(counts[201] ?? 0).toBeLessThan(10);
-    // 真實 D1：只有 1 筆 companion 動作落地
-    const actions = await db
-      .prepare('SELECT COUNT(*) AS c FROM companion_request_actions WHERE request_id = ?')
-      .bind(requestId)
-      .first<{ c: number }>();
-    expect(actions!.c).toBe(1);
-  });
-});
-
-// ----- §6.8 self-reported header without OAuth scope -----
-
-describe('POST /api/poi-favorites — §6.8 self-reported header without OAuth scope', () => {
-  it('header companion + auth 無 companion scope → fail-closed 401（V2 user fallback userId null）', async () => {
-    const requestId = await newTripRequest();
-    const resp = await post(
-      { companionRequestId: requestId, poiId: poiBase },
-      { bearer: await companionToken(env, { scopes: ['admin'] }) }, // self-reported header without OAuth gate
-      COMPANION,
-    );
-    expect(resp.status).toBe(401);
-
-    // server 端 audit_log 應寫 self_reported_scope
-    const audit = await db
-      .prepare(
-        `SELECT companion_failure_reason FROM audit_log
-         WHERE trip_id = 'system:companion' AND request_id = ? ORDER BY id DESC LIMIT 1`,
-      )
-      .bind(requestId)
-      .first<{ companion_failure_reason: string }>();
-    expect(audit!.companion_failure_reason).toBe('self_reported_scope');
-  });
-});

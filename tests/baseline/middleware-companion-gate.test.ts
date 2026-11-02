@@ -1,155 +1,81 @@
 /**
- * Middleware companion gate (poi-favorites-rename §5.1)
+ * Middleware companion gate — 白名單收窄（2026-11-02，最小權限）
  *
- * 端對端驗證：V2 Bearer token → middleware attaches auth.scopes / auth.clientId
- * → poi-favorites 的 companion 三 gate（X-Request-Scope header + scopes 含
- * 'companion' + clientId === env.TP_REQUEST_CLIENT_ID）。
+ * `X-Request-Scope: companion` 的請求只能打 agent MCP server 標為 companion 的 10 個工具對應的路徑
+ * （見 src/middleware/companion-scope.ts，放行側由 tests/agent-contract/companion-allowlist.test.ts 守）。
  *
- *   case (a) 三條件全符合 → companion mapping 啟用（以 request 提交者的身分建立收藏）
- *   case (b) 缺 scope（OAuth scopes 不含 companion）→ 401 + audit self_reported_scope
- *   case (c) 缺 clientId（mismatch）→ 401 + audit client_unauthorized
- *   case (d) 缺 header（X-Request-Scope）→ V2 user 路徑（無 user → 401，不寫 audit）
+ * 本檔守「被移除的 10 項」：帶 companion header（且持有合法的 companion service token）打這些路徑，
+ * 一律在 middleware 就回 403 PERM_DENIED「此操作超出旅伴請求範圍」，到不了 handler。
+ * 沒帶 companion header 的一般請求完全不受影響（同一批路徑不會被這個 gate 擋）。
  *
- * 走 HTTP 邊界：真實 AccessToken row + 真實路由派送（middleware → handler → _companion），
- * 不再手寫 context 呼叫 onRequest / resolveCompanionUserId；結果改驗回應與真實 D1 的資料變化。
+ * 舊版這裡驗的是「companion 三 gate（header + OAuth scope + clientId）→ 以 request 提交者身分建立收藏」；
+ * 那條路徑現在被白名單擋在 handler 之前，無法由 HTTP 邊界到達，相關測試已刪除（見 PR 說明）。
  */
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createTestDb, disposeMiniflare } from './setup';
-import { mockEnv, seedUser, seedTrip, seedPoi } from './helpers';
+import { mockEnv } from './helpers';
 import { createApi, type Api } from './http';
 import { serviceTokenFor } from './service-token';
-import { cleanupTrips } from './cleanup-trips';
+
+const TP_REQUEST_CLIENT_ID = 'tripline-internal-cli';
+const ORIGIN = 'https://trip-planner-dby.pages.dev';
+const SCOPE_DETAIL = '此操作超出旅伴請求範圍';
 
 let db: D1Database;
 let api: Api;
-let submitterId: string;
-let poiId: number;
-const requestIds: number[] = [];
-
-const TP_REQUEST_CLIENT_ID = 'tripline-internal-cli';
-const SUBMITTER_EMAIL = 'companion-gate-submitter@test.com';
-const TRIP_ID = 'companion-gate-trip-1';
+let companionBearer: string;
 
 beforeAll(async () => {
   db = await createTestDb();
-  api = createApi({ env: mockEnv(db, { TP_REQUEST_CLIENT_ID, ALLOWED_ORIGINS: 'https://trip-planner-dby.pages.dev' }) });
-  submitterId = await seedUser(db, SUBMITTER_EMAIL);
-  await seedTrip(db, { id: TRIP_ID, owner: SUBMITTER_EMAIL });
-  poiId = await seedPoi(db, { name: 'companion-gate-poi' });
+  api = createApi({ env: mockEnv(db, { TP_REQUEST_CLIENT_ID, ALLOWED_ORIGINS: ORIGIN }) });
+  companionBearer = await serviceTokenFor(db, { clientId: TP_REQUEST_CLIENT_ID, scopes: ['companion'] });
 });
 
-beforeEach(async () => {
-  await db.prepare('DELETE FROM poi_favorites WHERE user_id = ?').bind(submitterId).run();
+afterAll(disposeMiniflare);
+
+/** 2026-11-02 自白名單移除的 10 項（method, 代表性 path）。 */
+const REMOVED: Array<[string, string]> = [
+  ['POST', '/api/trips/t-1/entries/1/trip-pois'],
+  ['PATCH', '/api/trips/t-1/trip-pois/5'],
+  ['DELETE', '/api/trips/t-1/trip-pois/5'],
+  ['PATCH', '/api/requests/42'],
+  ['GET', '/api/trips/t-1/days/1'],
+  ['GET', '/api/requests?tripId=t-1'],
+  ['GET', '/api/poi-favorites'],
+  ['POST', '/api/poi-favorites'],
+  ['DELETE', '/api/poi-favorites/123'],
+  ['POST', '/api/poi-favorites/123/add-to-trip'],
+];
+
+async function call(method: string, path: string, companion: boolean): Promise<{ status: number; code?: string; detail?: string }> {
+  const res = await api.request(method, `https://test.com${path}`, {
+    bearer: companionBearer,
+    headers: { ...(companion ? { 'X-Request-Scope': 'companion' } : {}), Origin: ORIGIN },
+    json: method === 'GET' ? undefined : {},
+  });
+  const err = ((await res.json().catch(() => ({}))) as { error?: { code?: string; detail?: string } }).error;
+  return { status: res.status, code: err?.code, detail: err?.detail };
+}
+
+describe('companion 白名單收窄：被移除的 10 項 → 403 PERM_DENIED', () => {
+  it('恰好 10 項', () => expect(REMOVED).toHaveLength(10));
+
+  it.each(REMOVED)('companion header + 合法 companion token：%s %s → 403 PERM_DENIED（超出旅伴請求範圍）', async (method, path) => {
+    const r = await call(method, path, true);
+    expect(r.status).toBe(403);
+    expect(r.code).toBe('PERM_DENIED');
+    expect(r.detail).toBe(SCOPE_DETAIL);
+  });
+
+  it.each(REMOVED)('對照組：同一路徑沒帶 companion header：%s %s → 不是白名單的 403', async (method, path) => {
+    const r = await call(method, path, false);
+    expect(r.detail).not.toBe(SCOPE_DETAIL);
+  });
 });
 
-afterAll(async () => {
-  for (const id of requestIds) {
-    await db.prepare('DELETE FROM companion_request_actions WHERE request_id = ?').bind(id).run();
-    await db.prepare('DELETE FROM audit_log WHERE request_id = ?').bind(id).run();
-    await db.prepare('DELETE FROM trip_requests WHERE id = ?').bind(id).run();
-  }
-  await db.prepare('DELETE FROM poi_favorites WHERE user_id = ?').bind(submitterId).run();
-  await cleanupTrips(db, [TRIP_ID], ['companion-gate-poi']);
-  await db.prepare('DELETE FROM users WHERE id = ?').bind(submitterId).run();
-  await disposeMiniflare();
-});
-
-async function seedRequest(): Promise<number> {
-  const row = await db
-    .prepare(
-      'INSERT INTO trip_requests (trip_id, message, submitted_by, status) VALUES (?, ?, ?, ?) RETURNING id',
-    )
-    .bind(TRIP_ID, 'gate test', SUBMITTER_EMAIL, 'processing')
-    .first<{ id: number }>();
-  requestIds.push(row!.id);
-  return row!.id;
-}
-
-function postFavorite(token: string, requestId: number, withScopeHeader = true): Promise<Response> {
-  return api.request('POST', 'https://test.com/api/poi-favorites', {
-    bearer: token,
-    headers: {
-      ...(withScopeHeader ? { 'X-Request-Scope': 'companion' } : {}),
-      Origin: 'https://trip-planner-dby.pages.dev',
-    },
-    json: { poiId, companionRequestId: requestId },
-  });
-}
-
-async function failureReason(requestId: number): Promise<string | undefined> {
-  const audit = await db
-    .prepare(
-      `SELECT companion_failure_reason FROM audit_log
-       WHERE trip_id = 'system:companion' AND request_id = ? AND companion_failure_reason IS NOT NULL
-       ORDER BY id DESC LIMIT 1`,
-    )
-    .bind(requestId)
-    .first<{ companion_failure_reason: string }>();
-  return audit?.companion_failure_reason;
-}
-
-async function favoritesOf(userId: string): Promise<number> {
-  const row = await db
-    .prepare('SELECT COUNT(*) AS n FROM poi_favorites WHERE user_id = ? AND poi_id = ? AND deleted_at IS NULL')
-    .bind(userId, poiId)
-    .first<{ n: number }>();
-  return row!.n;
-}
-
-describe('middleware companion gate (§5.1)', () => {
-  it('case (a) Bearer companion scope + 對的 clientId + 對的 header → 三 gate 全過 / 以 request 提交者身分建立收藏', async () => {
-    const token = await serviceTokenFor(db, { clientId: TP_REQUEST_CLIENT_ID, scopes: ['companion'] });
-    const requestId = await seedRequest();
-
-    const res = await postFavorite(token, requestId);
-    expect(res.status).toBe(201);
-    const body = (await res.json()) as { userId: string; poiId: number };
-    // middleware 把 scopes / clientId 帶進去，三 gate 才會過；收藏歸屬是 request 提交者，不是 service token
-    expect(body.userId).toBe(submitterId);
-    expect(body.poiId).toBe(poiId);
-    expect(await favoritesOf(submitterId)).toBe(1);
-
-    // companion 寫入留下以 request 為單位的稽核
-    const audit = await db
-      .prepare(`SELECT changed_by FROM audit_log WHERE trip_id = 'system:companion' AND request_id = ? AND table_name = 'poi_favorites'`)
-      .bind(requestId)
-      .first<{ changed_by: string }>();
-    expect(audit?.changed_by).toBe(`companion:${requestId}`);
-    expect(await failureReason(requestId)).toBeUndefined();
-  });
-
-  it('case (b) Bearer 不含 companion scope → 401 + audit self_reported_scope', async () => {
-    const token = await serviceTokenFor(db, { clientId: TP_REQUEST_CLIENT_ID, scopes: ['admin'] }); // 缺 companion
-    const requestId = await seedRequest();
-
-    const res = await postFavorite(token, requestId);
-    expect(res.status).toBe(401);
-    expect(await failureReason(requestId)).toBe('self_reported_scope');
-    expect(await favoritesOf(submitterId)).toBe(0);
-  });
-
-  it('case (c) Bearer 含 companion scope 但 clientId 不對 → 401 + audit client_unauthorized', async () => {
-    const token = await serviceTokenFor(db, { clientId: 'rogue-cli', scopes: ['companion'] });
-    const requestId = await seedRequest();
-
-    const res = await postFavorite(token, requestId);
-    expect(res.status).toBe(401);
-    expect(await failureReason(requestId)).toBe('client_unauthorized');
-    expect(await favoritesOf(submitterId)).toBe(0);
-  });
-
-  it('case (d) 缺 X-Request-Scope header → 走 V2 user 路徑（服務 token 無 user → 401，不寫 audit）', async () => {
-    const token = await serviceTokenFor(db, { clientId: TP_REQUEST_CLIENT_ID, scopes: ['companion'] });
-    const requestId = await seedRequest();
-
-    const res = await postFavorite(token, requestId, false);
-    expect(res.status).toBe(401);
-
-    const audit = await db
-      .prepare(`SELECT id FROM audit_log WHERE trip_id = 'system:companion' AND request_id = ?`)
-      .bind(requestId)
-      .first();
-    expect(audit).toBeNull();
-    expect(await favoritesOf(submitterId)).toBe(0);
+describe('companion 白名單：保留項仍通過 gate', () => {
+  it('companion header：POST /api/trips/t-1/recompute-travel 不被白名單擋（放行側完整清單見 agent-contract）', async () => {
+    const r = await call('POST', '/api/trips/t-1/recompute-travel', true);
+    expect(r.detail).not.toBe(SCOPE_DETAIL);
   });
 });

@@ -22,11 +22,9 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createTestDb, disposeMiniflare } from './setup';
 import { mockEnv, seedPoi, userIdFor } from './helpers';
 import { createApi, type Api } from './http';
-import { serviceTokenFor } from './service-token';
 import type { Env } from '../../src/env';
 
 const BASE = 'https://test.com';
-const ORIGIN = 'https://trip-planner-dby.pages.dev';
 
 let db: D1Database;
 let env: Env;
@@ -56,49 +54,11 @@ afterAll(async () => {
   await disposeMiniflare();
 });
 
-function spoofedCompanionPost(ip: string, companionRequestId: number, bearer?: string): Promise<Response> {
-  return api.request('POST', `${BASE}/api/poi-favorites`, {
-    // 無 auth（匿名）或只有無 companion scope 的 bearer — 模擬 unauthenticated / stolen-credential 場景
-    bearer,
-    headers: { Origin: ORIGIN, 'X-Request-Scope': 'companion', 'CF-Connecting-IP': ip },
-    json: { poiId: validPoiId, companionRequestId },
-  });
-}
-
 const bucketOf = (key: string) =>
   db.prepare('SELECT count, locked_until FROM rate_limit_buckets WHERE bucket_key = ?').bind(key)
     .first<{ count: number; locked_until: number | null }>();
 
 describe('v2.33.105 SEC-2 bucket-spoof DoS prevention', () => {
-  it('unauthenticated header companion + claimed requestId=999 → 401, 不該 bump companion bucket', async () => {
-    // 攻擊者送 fake companion header + 隨意 requestId
-    const fakeRequestId = 999_999;
-    const key = `poi-favorites-post:companion:${fakeRequestId}`;
-    bucketKeys.push(key, 'poi-favorites-pre-gate-ip:1.2.3.4');
-    const resp = await spoofedCompanionPost('1.2.3.4', fakeRequestId);
-    expect(resp.status).toBe(401);
-    // 無 companion scope 的 bearer：到得了 handler，pre-gate IP throttle 通過（< 200 limit）→ actor resolve 失敗 → 401
-    const stolen = await serviceTokenFor(db, { clientId: 'sec2-rogue', scopes: ['trips:read'] });
-    const resp2 = await spoofedCompanionPost('1.2.3.4', fakeRequestId, stolen);
-    expect(resp2.status).toBe(401);
-
-    // verify companion bucket 沒被 bump（spoof-proof）
-    expect(await bucketOf(key)).toBeNull();
-  });
-
-  it('10 個 unauthenticated bucket-spoof attempts → 不會 lock 該 requestId bucket', async () => {
-    const targetRequestId = 888_888;
-    const key = `poi-favorites-post:companion:${targetRequestId}`;
-    bucketKeys.push(key, 'poi-favorites-pre-gate-ip:5.6.7.8');
-    // Fire 10 spoofed attempts
-    const stolen = await serviceTokenFor(db, { clientId: 'sec2-rogue', scopes: ['trips:read'] });
-    for (let i = 0; i < 10; i++) {
-      const resp = await spoofedCompanionPost('5.6.7.8', targetRequestId, i % 2 ? stolen : undefined);
-      expect(resp.status).toBe(401);
-    }
-    // companion bucket 應該完全 fresh（spoof 不可 bump 它）
-    expect(await bucketOf(key)).toBeNull();
-  });
 
   it('pre-gate IP throttle: 200 burst 同 IP 觸 lock', async () => {
     const ipBucketKey = 'poi-favorites-pre-gate-ip:9.9.9.9';

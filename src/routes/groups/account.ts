@@ -11,6 +11,7 @@ import { onRequestDelete as accountConnectedAppsClientIdDelete } from '../handle
 import { onRequestPost as accountDeleteReauthPost, onRequestGet as accountDeleteReauthGet, onRequestDelete as accountDeleteReauthDelete } from '../handlers/account/delete-reauth';
 import { onRequestGet as accountIndexGet, onRequestDelete as accountIndexDelete } from '../handlers/account/index';
 import { onRequestGet as accountNotificationsGet, onRequestPatch as accountNotificationsPatch } from '../handlers/account/notifications';
+import { onRequestPost as accountPasswordPost } from '../handlers/account/password';
 import { onRequestPatch as accountProfilePatch } from '../handlers/account/profile';
 import { onRequestGet as accountSessionsGet, onRequestDelete as accountSessionsDelete } from '../handlers/account/sessions';
 import { onRequestDelete as accountSessionsSidDelete } from '../handlers/account/sessions/@sid';
@@ -148,6 +149,20 @@ export function registerAccountRoutes(app: OpenAPIHono<AppEnv>): void {
       401: E401,
       403: err('trip 範圍的受限 token 不可改帳號資料（code: PERM_DENIED）'),
     } },
+  });
+  legacyRoute(app, {
+    method: 'post', path: '/api/account/password', auth: 'required', handler: accountPasswordPost, summary: '變更密碼（已登入）',
+    docs: {
+      body: S.Account_ChangePasswordBody,
+      responses: {
+        200: { description: '密碼已更新；其他裝置的登入已全部失效，目前這個登入保留；已寄通知信（寄信失敗不影響結果）', schema: S.Account_Ok },
+        400: err('新密碼少於 8 字元（CHANGE_PASSWORD_TOO_SHORT），或與目前密碼相同（CHANGE_PASSWORD_SAME）'),
+        401: E401,
+        403: err('目前密碼不正確或沒帶（CHANGE_PASSWORD_CURRENT_INVALID，刻意不用 401，避免 client 當成登入過期）；或非第一方 client／受限 token（PERM_DENIED）'),
+        409: err('此帳號沒有 local 密碼（只用 Google 登入）（CHANGE_PASSWORD_NO_PASSWORD）'),
+        429: err('目前密碼輸錯過多被暫時鎖定，Retry-After 為等待秒數（CHANGE_PASSWORD_RATE_LIMITED）'),
+      },
+    },
   });
   legacyRoute(app, {
     method: 'get', path: '/api/account/sessions', auth: 'required', handler: accountSessionsGet, summary: '有效連線（OAuth grant）',

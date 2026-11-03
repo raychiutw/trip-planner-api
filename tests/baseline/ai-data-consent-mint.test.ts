@@ -100,11 +100,38 @@ describe('mint-restricted × AI 資料同意', () => {
     expect((await mint(id)).status).toBe(403);
     expect(await tokens()).toHaveLength(0);
     expect(JSON.parse((await audit()).at(-1)!.metadata).missing).toBe('submitter');
+    expect(await reqState(id)).toMatchObject({ status: 'failed', terminal_reason: 'needs_consent' });
   });
 
   it('送出者是舊版同意（stale）→ 不簽發', async () => {
     await seedEvent(OWNER, 'accepted'); await seedEvent(COLLAB, 'accepted', 'ai-data-v0');
-    expect((await mint(await seedRequest(COLLAB))).status).toBe(403);
+    const id = await seedRequest(COLLAB);
+    expect((await mint(id)).status).toBe(403);
+    expect(await reqState(id)).toMatchObject({ status: 'failed', terminal_reason: 'needs_consent' });
+  });
+
+  it('processing 狀態的請求（MINTABLE）缺 owner 同意 → 同樣 403、終結', async () => {
+    const id = await seedRequest(OWNER, 'processing');
+    expect((await mint(id)).status).toBe(403);
+    expect(await tokens()).toHaveLength(0);
+    expect(await reqState(id)).toMatchObject({ status: 'failed', terminal_reason: 'needs_consent' });
+  });
+
+  it('送出者 email 大小寫不同（legacy 未正規化）仍對得上使用者：旅伴沒同意 → 擋', async () => {
+    await seedEvent(OWNER, 'accepted');
+    expect((await mint(await seedRequest(COLLAB.toUpperCase()))).status).toBe(403);
+  });
+
+  it('submitted_by 為空字串 → 視為非使用者，只看 owner（owner valid → 簽發）', async () => {
+    await seedEvent(OWNER, 'accepted');
+    expect((await mint(await seedRequest(''))).status).toBe(200);
+  });
+
+  it('邊界：email 形狀但不在 users 內的 submitted_by 視為非使用者（只看 owner）；服務送出但 owner 缺同意仍擋', async () => {
+    await seedEvent(OWNER, 'accepted');
+    expect((await mint(await seedRequest('ghost@test.com'))).status).toBe(200); // 刻意的豁免邊界
+    await clearEvents(); // owner 也沒同意了
+    expect((await mint(await seedRequest('service:daily-check'))).status).toBe(403);
   });
 
   it('服務／系統送出的請求（submitted_by 不是使用者）只看 owner：owner 有效 → 簽發', async () => {

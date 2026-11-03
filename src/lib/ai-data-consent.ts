@@ -121,7 +121,7 @@ export async function consentGapAtMint(env: Pick<Env, 'DB' | 'AI_CONSENT_ENFORCE
   if (!isConsentEnforced(env)) return null;
   if ((await getConsentState(env.DB, ownerUserId)).status !== 'valid') return 'owner';
   if (!submittedBy) return null;
-  const submitter = await env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(submittedBy).first<{ id: string }>();
+  const submitter = await env.DB.prepare('SELECT id FROM users WHERE email = ? COLLATE NOCASE').bind(submittedBy).first<{ id: string }>();
   if (!submitter || submitter.id === ownerUserId) return null;
   return (await getConsentState(env.DB, submitter.id)).status === 'valid' ? null : 'submitter';
 }

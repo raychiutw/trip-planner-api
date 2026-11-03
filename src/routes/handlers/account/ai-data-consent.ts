@@ -51,6 +51,9 @@ export const onRequestDelete: PagesFunction<Env> = async (context) => {
   return stateResponse(context.env, uid);
 };
 
+/** 寫回 chat 的說明：這些請求從未開始，不是「停止等待」（預設的 cancelled 文案會讓人以為 AI 可能已動過行程）。 */
+const WITHDRAWN_REPLY = 'AI 資料同意已撤回，這個請求沒有被處理。';
+
 /**
  * 終結「排隊中尚未開始」（status=open）的請求：本人送出的，以及本人擁有的行程上別人送出的
  * （owner 撤回後，旅伴的請求也不該再被處理）。processing 的不動——已開始的工作不保證能停。
@@ -65,6 +68,6 @@ async function terminateQueuedRequests(db: D1Database, userId: string, email: st
     .bind(email, userId)
     .all<Record<string, unknown>>();
   for (const row of results ?? []) {
-    await updateRequest(db, row, { status: 'failed', terminalReason: 'cancelled' }, { changedBy: 'system:ai-consent-withdrawn', onlyIfActive: true });
+    await updateRequest(db, row, { status: 'failed', terminalReason: 'cancelled', reply: WITHDRAWN_REPLY }, { changedBy: 'system:ai-consent-withdrawn', onlyIfActive: true });
   }
 }

@@ -365,6 +365,15 @@ describe('撤回：排隊中尚未開始的請求被終結', () => {
     await withdraw(OWNER);
     expect(await row(collabOpen)).toEqual({ status: 'failed', terminal_reason: 'cancelled' });
   });
+  it('被終結的請求帶說明（AI 資料同意已撤回），不是預設的「已停止等待」', async () => {
+    await clearEvents();
+    await accept(COLLAB);
+    const id = await insertReq(COLLAB, 'open');
+    await withdraw(COLLAB);
+    const r = await db.prepare('SELECT status, reply FROM trip_requests WHERE id = ?').bind(id).first<{ status: string; reply: string | null }>();
+    expect(r!.status).toBe('failed');
+    expect(r!.reply).toContain('AI 資料同意已撤回');
+  });
   it('從未同意者「撤回」不終結任何請求', async () => {
     await clearEvents();
     const open = await insertReq(OTHER, 'open');

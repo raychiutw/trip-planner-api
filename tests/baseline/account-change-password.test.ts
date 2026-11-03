@@ -190,9 +190,25 @@ describe('POST /api/account/password', () => {
       expect(res.status).toBe(200);
       expect(spy).toHaveBeenCalled();
       expect(await verifyPassword(NEW, (await storedHash(u.userId))!)).toBe(true);
+      // 其他裝置沒登出這件事要看得到：稽核留記錄，不能只有 console
+      const row = await db.prepare(`SELECT outcome, metadata FROM auth_audit_log WHERE user_id = ? AND event_type = 'password_change'`).bind(u.userId).first<{ outcome: string; metadata: string }>();
+      expect(row?.outcome).toBe('success');
+      expect(JSON.parse(row!.metadata)).toEqual({ revoke_failed: true });
     } finally {
       spy.mockRestore();
     }
+  });
+
+  it('目前這個 token 沒有 grantId（舊格式）：其他 grant 照撤銷，目前 token 仍可用', async () => {
+    const u = await seed();
+    const other = await sessionFor(db, u.email, u.userId);
+    const bearer = `chgpw-nogrant-${crypto.randomUUID()}`;
+    await new D1Adapter(db, 'AccessToken').upsert(bearer, { client_id: 'tripline-web', user_id: u.userId, scopes: ['openid'] }, 3600);
+    stubMailer();
+    const res = await change(bearer, { current_password: OLD, new_password: NEW });
+    expect(res.status).toBe(200);
+    expect(await grantAlive(other.grantId)).toBe(false);
+    expect((await api.get('/api/account/sessions', { bearer })).status).toBe(200);
   });
 
   it('400 CHANGE_PASSWORD_SAME：新舊密碼相同', async () => {

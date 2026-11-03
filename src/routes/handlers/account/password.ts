@@ -31,8 +31,8 @@ interface Body {
 export const onRequestPost: PagesFunction<Env> = async (context) => {
   const user = await requireAccountUser(context);
   const { env, request } = context;
-  const audit = (outcome: 'success' | 'failure', failureReason?: string) =>
-    recordAuthEvent(env.DB, request, { eventType: 'password_change', outcome, userId: user.uid, failureReason }, env);
+  const audit = (outcome: 'success' | 'failure', failureReason?: string, metadata?: Record<string, unknown>) =>
+    recordAuthEvent(env.DB, request, { eventType: 'password_change', outcome, userId: user.uid, failureReason, metadata }, env);
 
   const limitKey = `change-password:${user.uid}`;
   const limited = (retryAfter: number) =>
@@ -82,20 +82,31 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
   await resetRateLimit(env.DB, limitKey);
 
   // 撤銷其他裝置：保留目前這個 grant（與「撤銷其他所有連線」同一套做法）。
-  // best-effort：密碼已換成功，撤銷失敗不能讓使用者以為沒改成功。
+  // 目前 grant 優先取中介層已解好的 auth.grantId，查表只是後備；沒有 grantId 的舊格式 token 本來就不在
+  // listUserGrants 裡，不會被撤銷。
+  // best-effort：密碼已換成功，撤銷失敗不能讓使用者以為沒改成功；但「其他裝置沒登出」要留稽核與告警，不能只有 console。
+  let revokeFailed = false;
   try {
-    const currentSid = await currentGrantId(request, env);
+    const currentSid = user.auth.grantId ?? (await currentGrantId(request, env));
     const adapter = new D1Adapter(env.DB, 'AccessToken');
     for (const g of await listUserGrants(env, user.uid)) {
       if (g.grantId !== currentSid) await adapter.revokeByGrantId(g.grantId);
     }
   } catch (err) {
+    revokeFailed = true;
     // eslint-disable-next-line no-console
     console.error('[change-password] revoke other grants failed:', (err as Error).message);
+    await alertAdminTelegram(env, `變更密碼後其他裝置未登出（密碼已更新）: ${maskEmail(user.email)}`).catch(() => {});
   }
 
-  await sendConfirmation(env, user.email, user.uid);
-  await audit('success');
+  // 通知信是事後通知：任何一步失敗（含查 display_name）都不能把已成功的變更變成 500。
+  try {
+    await sendConfirmation(env, user.email, user.uid);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[change-password] confirmation failed:', (err as Error).message);
+  }
+  await audit('success', undefined, revokeFailed ? { revoke_failed: true } : undefined);
   return rawJson({ ok: true });
 };
 

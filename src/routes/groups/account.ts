@@ -1,14 +1,17 @@
+import { z } from '@hono/zod-openapi';
 import type { OpenAPIHono } from '@hono/zod-openapi';
 import type { AppEnv } from '../../env';
 import { legacyRoute } from '../../legacy';
 import { ApiError } from '../../schemas/common';
 import * as S from '../../schemas/account';
 import { onRequestGet as accountAiAuthorizationGet, onRequestPost as accountAiAuthorizationPost } from '../handlers/account/ai-authorization';
+import { onRequestGet as accountAiDataConsentGet, onRequestPost as accountAiDataConsentPost, onRequestDelete as accountAiDataConsentDelete } from '../handlers/account/ai-data-consent';
 import { onRequestGet as accountConnectedAppsGet } from '../handlers/account/connected-apps';
 import { onRequestDelete as accountConnectedAppsClientIdDelete } from '../handlers/account/connected-apps/@client_id';
 import { onRequestPost as accountDeleteReauthPost, onRequestGet as accountDeleteReauthGet, onRequestDelete as accountDeleteReauthDelete } from '../handlers/account/delete-reauth';
 import { onRequestGet as accountIndexGet, onRequestDelete as accountIndexDelete } from '../handlers/account/index';
 import { onRequestGet as accountNotificationsGet, onRequestPatch as accountNotificationsPatch } from '../handlers/account/notifications';
+import { onRequestPost as accountPasswordPost } from '../handlers/account/password';
 import { onRequestPatch as accountProfilePatch } from '../handlers/account/profile';
 import { onRequestGet as accountSessionsGet, onRequestDelete as accountSessionsDelete } from '../handlers/account/sessions';
 import { onRequestDelete as accountSessionsSidDelete } from '../handlers/account/sessions/@sid';
@@ -51,6 +54,22 @@ export function registerAccountRoutes(app: OpenAPIHono<AppEnv>): void {
   legacyRoute(app, {
     method: 'post', path: '/api/account/ai-authorization', auth: 'required', handler: accountAiAuthorizationPost, summary: '授權 Tripline AI',
     docs: { responses: { 200: { description: '建立（或更新）授權；idempotent，永遠回 authorized: true', schema: S.Account_AiAuthorizationStatus }, 401: E401, 403: E403_ACCOUNT } },
+  });
+  const E409_CONSENT = { description: 'body 的 version 未知或不是目前版本（AI_CONSENT_VERSION_MISMATCH）；或目前版本的說明文字尚未填妥（AI_CONSENT_NOT_READY，GET／DELETE 不受影響）。兩者 error 內都帶 currentVersion，且不寫入', schema: z.union([S.AiConsentVersionMismatchError, S.AiConsentNotReadyError]) };
+  legacyRoute(app, {
+    method: 'get', path: '/api/account/ai-data-consent', auth: 'required', handler: accountAiDataConsentGet, summary: 'AI 資料同意：狀態與說明文字',
+    docs: { responses: { 200: { description: '同意狀態（none／valid／stale／withdrawn）、目前版本、已接受版本與時間、目前版本的說明文字、enforced', schema: S.Account_AiDataConsentState }, 401: E401, 403: E403_ACCOUNT } },
+  });
+  legacyRoute(app, {
+    method: 'post', path: '/api/account/ai-data-consent', auth: 'required', handler: accountAiDataConsentPost, summary: 'AI 資料同意：同意目前版本',
+    docs: { body: S.Account_AiDataConsentBody, responses: {
+      200: { description: '已同意（重複同意同一版冪等，不新增事件），回新狀態', schema: S.Account_AiDataConsentState },
+      400: E400('沒帶 version 或 body 不是合法 JSON'), 401: E401, 403: E403_ACCOUNT, 409: E409_CONSENT,
+    } },
+  });
+  legacyRoute(app, {
+    method: 'delete', path: '/api/account/ai-data-consent', auth: 'required', handler: accountAiDataConsentDelete, summary: 'AI 資料同意：撤回',
+    docs: { responses: { 200: { description: '已撤回（冪等；從未同意者回 none、不寫事件）。排隊中尚未開始的請求被終結；已開始的工作不保證能停，已送出的資料收不回來', schema: S.Account_AiDataConsentState }, 401: E401, 403: E403_ACCOUNT } },
   });
   legacyRoute(app, {
     method: 'get', path: '/api/account/connected-apps', auth: 'required', handler: accountConnectedAppsGet, summary: '已連線的應用程式',
@@ -130,6 +149,20 @@ export function registerAccountRoutes(app: OpenAPIHono<AppEnv>): void {
       401: E401,
       403: err('trip 範圍的受限 token 不可改帳號資料（code: PERM_DENIED）'),
     } },
+  });
+  legacyRoute(app, {
+    method: 'post', path: '/api/account/password', auth: 'required', handler: accountPasswordPost, summary: '變更密碼（已登入）',
+    docs: {
+      body: S.Account_ChangePasswordBody,
+      responses: {
+        200: { description: '密碼已更新；其他裝置的登入已全部失效，目前這個登入保留；已寄通知信（寄信失敗不影響結果）', schema: S.Account_Ok },
+        400: err('新密碼少於 8 字元（CHANGE_PASSWORD_TOO_SHORT），或與目前密碼相同（CHANGE_PASSWORD_SAME）'),
+        401: E401,
+        403: err('目前密碼不正確或沒帶（CHANGE_PASSWORD_CURRENT_INVALID，刻意不用 401，避免 client 當成登入過期）；或非第一方 client／受限 token（PERM_DENIED）'),
+        409: err('此帳號沒有 local 密碼（只用 Google 登入）（CHANGE_PASSWORD_NO_PASSWORD）'),
+        429: err('目前密碼輸錯過多被暫時鎖定，Retry-After 為等待秒數（CHANGE_PASSWORD_RATE_LIMITED）'),
+      },
+    },
   });
   legacyRoute(app, {
     method: 'get', path: '/api/account/sessions', auth: 'required', handler: accountSessionsGet, summary: '有效連線（OAuth grant）',

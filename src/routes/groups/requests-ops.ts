@@ -3,6 +3,7 @@ import type { AppEnv } from '../../env';
 import { legacyRoute } from '../../legacy';
 import { ApiError } from '../../schemas/common';
 import * as S from '../../schemas/requests-ops';
+import { AiConsentGated403 } from '../../schemas/account';
 import { onRequestGet as backfillStatusGet } from '../handlers/admin/backfill-status';
 import { onRequestPost as cacheCleanupPost } from '../handlers/admin/cache-cleanup';
 import { onRequestPost as mapsLockPost } from '../handlers/admin/maps-lock';
@@ -29,7 +30,7 @@ const opsScopeErr = (scope: string) => err(`token 不是帶 ${scope} scope 的 s
 
 export function registerRequestsOpsRoutes(app: OpenAPIHono<AppEnv>): void {
   legacyRoute(app, { method: 'get', path: '/api/requests', auth: 'required', handler: requestsGet, summary: '請求列表', docs: { query: S.Requests_ListQuery, responses: { 200: { description: '沒帶分頁參數回陣列；帶 limit／before／after 回 { items, hasMore }', schema: S.Requests_ListResponse }, 400: err('缺 tripId（且 token 沒有 ops:trips:read）'), 401: E401, 403: E403 } } });
-  legacyRoute(app, { method: 'post', path: '/api/requests', auth: 'required', handler: requestsPost, summary: '建立請求', docs: { body: S.Requests_CreateBody, responses: { 201: { description: '已建立', schema: S.Requests_Row }, 200: { description: '30 秒內相同（trip、message、送出者）且仍在 open／processing 的請求去重，回既有資料列', schema: S.Requests_Row }, 400: err('缺 tripId 或 message'), 401: E401, 403: err('對該行程沒有寫權限') } } });
+  legacyRoute(app, { method: 'post', path: '/api/requests', auth: 'required', handler: requestsPost, summary: '建立請求', docs: { body: S.Requests_CreateBody, responses: { 201: { description: '已建立', schema: S.Requests_Row }, 200: { description: '30 秒內相同（trip、message、送出者）且仍在 open／processing 的請求去重，回既有資料列', schema: S.Requests_Row }, 400: err('缺 tripId 或 message'), 401: E401, 403: AiConsentGated403 } } });
   legacyRoute(app, { method: 'get', path: '/api/requests/:id', auth: 'required', handler: requestByIdGet, summary: '單筆請求', docs: { responses: { 200: { description: '請求資料列（讀取時會順帶收屍逾時的請求）', schema: S.Requests_RowWithName }, 401: E401, 403: err('對該請求所屬行程沒有權限'), 404: err('找不到請求') } } });
   legacyRoute(app, { method: 'patch', path: '/api/requests/:id', auth: 'required', handler: requestByIdPatch, summary: '更新請求（需 companion scope 的 service token，或對該請求所屬行程有寫權限的使用者）', docs: { body: S.Requests_PatchBody, responses: { 200: { description: '更新後的資料列', schema: S.Requests_Row }, 400: err('status／processed_by／terminalReason 值不合法、status 倒退，或沒有任何要更新的欄位'), 401: E401, 403: err('既無 companion scope 也無該行程寫權限'), 404: err('找不到請求') } } });
 

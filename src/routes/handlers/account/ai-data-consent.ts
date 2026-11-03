@@ -68,6 +68,11 @@ async function terminateQueuedRequests(db: D1Database, userId: string, email: st
     .bind(email, userId)
     .all<Record<string, unknown>>();
   for (const row of results ?? []) {
-    await updateRequest(db, row, { status: 'failed', terminalReason: 'cancelled', reply: WITHDRAWN_REPLY }, { changedBy: 'system:ai-consent-withdrawn', onlyIfActive: true });
+    try {
+      await updateRequest(db, row, { status: 'failed', terminalReason: 'cancelled', reply: WITHDRAWN_REPLY }, { changedBy: 'system:ai-consent-withdrawn', onlyIfActive: true });
+    } catch (err) {
+      // 單筆失敗不能讓後面的請求留著不終結；已寫入 withdrawn，重試 DELETE 不會再清理
+      console.error('[ai-data-consent] terminate queued request failed:', err);
+    }
   }
 }

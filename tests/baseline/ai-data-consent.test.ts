@@ -430,3 +430,18 @@ describe('GET /api/requests：對服務 token 省略 submittedBy（email）', ()
     expectContract(ApiError, await res.json());
   });
 });
+
+describe('帳號刪除（eraseUserAccount）明確清掉同意事件，不單靠 FK cascade', () => {
+  it('tablesCleared 含 ai_data_consent_events，且該人的事件被清空、別人的保留', async () => {
+    await clearEvents();
+    await seedEvent(STRANGER, 'ai-data-v1', 'accepted');
+    await seedEvent(OTHER, 'ai-data-v1', 'accepted');
+    const { eraseUserAccount } = await import('../../src/lib/erasure');
+    const summary = await eraseUserAccount(db, uid(STRANGER));
+    expect(summary.tablesCleared.ai_data_consent_events).toBe(1);
+    expect(await events(STRANGER)).toEqual([]);
+    expect(await events(OTHER)).toHaveLength(1);
+    await seedUser(db, STRANGER);
+    await clearEvents();
+  });
+});

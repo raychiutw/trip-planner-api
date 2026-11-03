@@ -365,6 +365,22 @@ describe('撤回：排隊中尚未開始的請求被終結', () => {
     await withdraw(OWNER);
     expect(await row(collabOpen)).toEqual({ status: 'failed', terminal_reason: 'cancelled' });
   });
+  it('被終結的請求帶說明（AI 資料同意已撤回），不是預設的「已停止等待」', async () => {
+    await clearEvents();
+    await accept(COLLAB);
+    const id = await insertReq(COLLAB, 'open');
+    await withdraw(COLLAB);
+    const r = await db.prepare('SELECT status, reply FROM trip_requests WHERE id = ?').bind(id).first<{ status: string; reply: string | null }>();
+    expect(r!.status).toBe('failed');
+    expect(r!.reply).toContain('AI 資料同意已撤回');
+  });
+  it('重試撤回（已是 withdrawn）也會清掉殘留的排隊請求', async () => {
+    await clearEvents();
+    await accept(COLLAB); await withdraw(COLLAB);
+    const leftover = await insertReq(COLLAB, 'open');
+    await withdraw(COLLAB);
+    expect(await row(leftover)).toEqual({ status: 'failed', terminal_reason: 'cancelled' });
+  });
   it('從未同意者「撤回」不終結任何請求', async () => {
     await clearEvents();
     const open = await insertReq(OTHER, 'open');
@@ -419,5 +435,20 @@ describe('GET /api/requests：對服務 token 省略 submittedBy（email）', ()
     const res = await apiOn.request('GET', `/api/requests/${reqId}`, { bearer: svc });
     expect(res.status).toBe(403);
     expectContract(ApiError, await res.json());
+  });
+});
+
+describe('帳號刪除（eraseUserAccount）明確清掉同意事件，不單靠 FK cascade', () => {
+  it('tablesCleared 含 ai_data_consent_events，且該人的事件被清空、別人的保留', async () => {
+    await clearEvents();
+    await seedEvent(STRANGER, 'ai-data-v1', 'accepted');
+    await seedEvent(OTHER, 'ai-data-v1', 'accepted');
+    const { eraseUserAccount } = await import('../../src/lib/erasure');
+    const summary = await eraseUserAccount(db, uid(STRANGER));
+    expect(summary.tablesCleared.ai_data_consent_events).toBe(1);
+    expect(await events(STRANGER)).toEqual([]);
+    expect(await events(OTHER)).toHaveLength(1);
+    await seedUser(db, STRANGER);
+    await clearEvents();
   });
 });

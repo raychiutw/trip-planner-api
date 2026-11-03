@@ -65,7 +65,7 @@ const TRIP_ORPHAN_TABLES = [
  * `auth_audit_log` 保留在此：它雖有 30 天保留期，但刪帳號時就該清掉可識別列。
  */
 const USER_ORPHAN_TABLES = [
-  'session_devices', 'auth_audit_log',
+  'session_devices', 'auth_audit_log', 'ai_data_consent_events',
 ] as const;
 
 /**

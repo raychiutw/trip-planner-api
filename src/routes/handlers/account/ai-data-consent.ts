@@ -47,9 +47,13 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
 export const onRequestDelete: PagesFunction<Env> = async (context) => {
   const { uid, email } = await requireAccountUser(context);
   const wrote = await recordWithdrawn(context.env.DB, uid);
-  if (wrote) await terminateQueuedRequests(context.env.DB, uid, email);
+  // 已是 withdrawn（重試）也再清一次：先前清理若中途失敗（500），重試時 wrote=false 不能讓排隊請求永遠留著（冪等：只動 open）。
+  if (wrote || (await getConsentState(context.env.DB, uid)).status === 'withdrawn') await terminateQueuedRequests(context.env.DB, uid, email);
   return stateResponse(context.env, uid);
 };
+
+/** 寫回 chat 的說明：這些請求從未開始，不是「停止等待」（預設的 cancelled 文案會讓人以為 AI 可能已動過行程）。 */
+const WITHDRAWN_REPLY = 'AI 資料同意已撤回，這個請求沒有被處理。';
 
 /**
  * 終結「排隊中尚未開始」（status=open）的請求：本人送出的，以及本人擁有的行程上別人送出的
@@ -65,6 +69,11 @@ async function terminateQueuedRequests(db: D1Database, userId: string, email: st
     .bind(email, userId)
     .all<Record<string, unknown>>();
   for (const row of results ?? []) {
-    await updateRequest(db, row, { status: 'failed', terminalReason: 'cancelled' }, { changedBy: 'system:ai-consent-withdrawn', onlyIfActive: true });
+    try {
+      await updateRequest(db, row, { status: 'failed', terminalReason: 'cancelled', reply: WITHDRAWN_REPLY }, { changedBy: 'system:ai-consent-withdrawn', onlyIfActive: true });
+    } catch (err) {
+      // 單筆失敗不能讓後面的請求留著不終結；已寫入 withdrawn，重試 DELETE 不會再清理
+      console.error('[ai-data-consent] terminate queued request failed:', err);
+    }
   }
 }

@@ -93,7 +93,7 @@ const JSON_HEADERS = { 'content-type': 'application/json' } as const;
 export function errorResponse(err: AppError): Response {
   const detail = err.status < 500 && err.detail ? err.detail : undefined;
   const extra = err.status < 500 ? err.extra : undefined;
-  return new Response(JSON.stringify({ error: { code: err.code, message: err.message, detail, ...extra } }), {
+  return new Response(JSON.stringify({ error: { ...extra, code: err.code, message: err.message, detail } }), {
     status: err.status,
     headers: JSON_HEADERS,
   });

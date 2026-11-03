@@ -47,7 +47,8 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
 export const onRequestDelete: PagesFunction<Env> = async (context) => {
   const { uid, email } = await requireAccountUser(context);
   const wrote = await recordWithdrawn(context.env.DB, uid);
-  if (wrote) await terminateQueuedRequests(context.env.DB, uid, email);
+  // 已是 withdrawn（重試）也再清一次：先前清理若中途失敗（500），重試時 wrote=false 不能讓排隊請求永遠留著（冪等：只動 open）。
+  if (wrote || (await getConsentState(context.env.DB, uid)).status === 'withdrawn') await terminateQueuedRequests(context.env.DB, uid, email);
   return stateResponse(context.env, uid);
 };
 

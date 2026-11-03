@@ -196,11 +196,13 @@ describe('POST /api/account/password', () => {
     expect(await verifyPassword(OLD, (await storedHash(u.userId))!)).toBe(true);
   });
 
-  it('成功後清掉輸錯計次（輸錯 4 次再成功，之後用新密碼當目前密碼仍可再改）', async () => {
+  it('成功後清掉輸錯計次：成功前輸錯 4 次，成功後再輸錯 4 次仍是 403，不會被累計鎖住', async () => {
     const u = await seed();
     stubMailer();
     for (let i = 0; i < 4; i++) await change(u.bearer, { current_password: `wrong-${i}-xxxx`, new_password: NEW });
     expect((await change(u.bearer, { current_password: OLD, new_password: NEW })).status).toBe(200);
-    expect((await change(u.bearer, { current_password: NEW, new_password: 'another-pass-999' })).status).toBe(200);
+    for (let i = 0; i < 4; i++) {
+      expect((await change(u.bearer, { current_password: `again-${i}-xxxx`, new_password: 'another-pass-999' })).status).toBe(403);
+    }
   });
 });

@@ -22,6 +22,7 @@ export const Requests_Row = z.object({
 
 /** GET 系列會 LEFT JOIN users，多一欄 submittedByDisplayName（找不到使用者為 null）。 */
 export const Requests_RowWithName = Requests_Row.extend({
+  submittedBy: z.string().nullable().optional().describe('送出者 email；**服務 token 讀取時省略此欄**（資料最小化，ADR-0012），一般使用者照舊'),
   submittedByDisplayName: z.string().nullable(),
 }).openapi('Requests_RowWithName');
 

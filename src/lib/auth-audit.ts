@@ -57,6 +57,7 @@ export type AuthEventType =
   | 'logout'
   | 'password_reset_request'
   | 'password_reset_complete'
+  | 'password_change'
   | 'oauth_authorize'
   | 'oauth_consent'
   | 'token_issue'

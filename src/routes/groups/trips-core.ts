@@ -3,6 +3,7 @@ import type { AppEnv } from '../../env';
 import { legacyRoute } from '../../legacy';
 import { ApiError } from '../../schemas/common';
 import * as S from '../../schemas/trips-core';
+import { AiConsentGated403 } from '../../schemas/account';
 import { onRequestGet as myTripsGet } from '../handlers/my-trips';
 import { onRequestGet as tripsGet, onRequestPost as tripsPost } from '../handlers/trips';
 import { onRequestGet as tripGet, onRequestPut as tripPut, onRequestDelete as tripDelete } from '../handlers/trips/@id';
@@ -146,7 +147,7 @@ export function registerTripsCoreRoutes(app: OpenAPIHono<AppEnv>): void {
       200: { description: '30 秒內已有 pending 的健檢，直接回傳該報告（未建立新的）', schema: S.Trips_HealthCheckTriggerResult },
       202: { description: '已建立新的健檢請求（pending），結果非同步產生', schema: S.Trips_HealthCheckTriggerResult },
       401: E.unauthorized,
-      403: { description: '沒有此行程的寫入權限', schema: ApiError },
+      403: AiConsentGated403,
       422: { description: '行程沒有任何景點（TRIP_EMPTY）', schema: ApiError },
     } },
   });

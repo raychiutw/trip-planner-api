@@ -23,6 +23,7 @@
  */
 
 import { requireAuth, requireTripWrite } from '../../../../../../lib/permissions';
+import { assertAiConsent } from '../../../../../../lib/ai-data-consent';
 import { AppError } from '../../../../../../errors';
 import {
   isNoteAiDocType,
@@ -104,6 +105,8 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
   const docType = type;
 
   await requireTripWrite(env.DB, auth, tripId);
+  // AI 資料同意閘門（旗標開且文案填妥才生效）：在 expireNoteAiJobs 等任何寫入之前
+  await assertAiConsent(env, auth, tripId);
 
   await expireNoteAiJobs(env.DB, tripId, docType);
 

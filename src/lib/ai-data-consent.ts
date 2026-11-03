@@ -110,3 +110,18 @@ function consentError(code: 'AI_CONSENT_REQUIRED' | 'AI_CONSENT_OWNER_REQUIRED',
     ...(code === 'AI_CONSENT_REQUIRED' ? { status: state.status } : {}),
   });
 }
+
+/**
+ * mint 時的檢查（ADR-0012 補強）：agent 取得 owner 權限 token 才是資料真正交付 AI 的時間點。
+ * 入口閘門之外再檢查一次，涵蓋「旗標啟用前已排隊」與「撤回和建立請求同時發生」的請求。
+ * 回傳缺同意的一方（'owner' 或 'submitter'），都有效或不強制時回 null。
+ * 送出者不是一般使用者（submitted_by 不是任何使用者的 email，例如服務／系統送出）→ 只檢查 owner，同入口閘門的服務 token 豁免。
+ */
+export async function consentGapAtMint(env: Pick<Env, 'DB' | 'AI_CONSENT_ENFORCED'>, ownerUserId: string, submittedBy: string | null): Promise<'owner' | 'submitter' | null> {
+  if (!isConsentEnforced(env)) return null;
+  if ((await getConsentState(env.DB, ownerUserId)).status !== 'valid') return 'owner';
+  if (!submittedBy) return null;
+  const submitter = await env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(submittedBy).first<{ id: string }>();
+  if (!submitter || submitter.id === ownerUserId) return null;
+  return (await getConsentState(env.DB, submitter.id)).status === 'valid' ? null : 'submitter';
+}

@@ -103,6 +103,11 @@ export const Account_ConnectedAppRevoked = z.object({
 
 // ───────── 帳號刪除 ─────────
 
+export const Account_ChangePasswordBody = z.object({
+  current_password: z.string().optional().openapi({ description: '目前密碼；沒帶或錯誤一律 CHANGE_PASSWORD_CURRENT_INVALID' }),
+  new_password: z.string().openapi({ description: '新密碼，至少 8 字元，不可與目前密碼相同' }),
+}).openapi('Account_ChangePasswordBody');
+
 export const Account_DeletePreview = z.object({
   hasPassword: z.boolean().openapi({ description: '有 local 密碼身分 → 刪除時必須帶 password；否則要走 Google 重新驗證 challenge' }),
   reauthProvider: z.enum(['google']).nullable().openapi({ description: '無密碼帳號可用的重新驗證 provider（目前只有 google）；有密碼或沒有 Google 身分時為 null（此時無法刪除，fail-closed）' }),

@@ -8,6 +8,7 @@ import { mockEnv } from './helpers';
 import { createApi, type Api } from './http';
 import { sessionFor, type TestSession } from './account-session-helper';
 import { hashPassword, verifyPassword } from '../../src/lib/password';
+import { D1Adapter } from '../../src/lib/oauth-d1-adapter';
 
 const PREFIX = 'chgpw';
 const OLD = 'old-password-12345';
@@ -110,7 +111,7 @@ describe('POST /api/account/password', () => {
     const u = await seed();
     const stranger = await seed();
     stubMailer();
-    await change(u.bearer, { current_password: OLD, new_password: NEW });
+    expect((await change(u.bearer, { current_password: OLD, new_password: NEW })).status).toBe(200);
     expect(await grantAlive(stranger.grantId)).toBe(true);
   });
 
@@ -120,7 +121,9 @@ describe('POST /api/account/password', () => {
     await change(u.bearer, { current_password: OLD, new_password: NEW });
     const sent = mails(m);
     expect(sent).toHaveLength(1);
-    expect(String(sent[0]![1]?.body)).toContain(u.email);
+    const payload = String(sent[0]![1]?.body);
+    expect(payload).toContain(u.email);
+    expect(payload).toContain('密碼已更改'); // 信件內容是「密碼已更改」通知，不只是收件人對
   });
 
   it('成功：寄信失敗不影響結果（仍 200、密碼已換）', async () => {
@@ -168,6 +171,30 @@ describe('POST /api/account/password', () => {
     expect(await verifyPassword(OLD, (await storedHash(u.userId))!)).toBe(true);
   });
 
+  it('400：沒帶 new_password（body 驗證擋下），密碼不變、其他 grant 不受影響', async () => {
+    const u = await seed();
+    const other = await sessionFor(db, u.email, u.userId);
+    const res = await change(u.bearer, { current_password: OLD });
+    expect(res.status).toBe(400);
+    expect(await verifyPassword(OLD, (await storedHash(u.userId))!)).toBe(true);
+    expect(await grantAlive(other.grantId)).toBe(true);
+  });
+
+  it('撤銷其他 grant 失敗（best-effort）：密碼已換，仍回 200', async () => {
+    const u = await seed();
+    await sessionFor(db, u.email, u.userId);
+    stubMailer();
+    const spy = vi.spyOn(D1Adapter.prototype, 'revokeByGrantId').mockRejectedValue(new Error('d1 down'));
+    try {
+      const res = await change(u.bearer, { current_password: OLD, new_password: NEW });
+      expect(res.status).toBe(200);
+      expect(spy).toHaveBeenCalled();
+      expect(await verifyPassword(NEW, (await storedHash(u.userId))!)).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('400 CHANGE_PASSWORD_SAME：新舊密碼相同', async () => {
     const u = await seed();
     const res = await change(u.bearer, { current_password: OLD, new_password: OLD });
@@ -199,7 +226,9 @@ describe('POST /api/account/password', () => {
   it('成功後清掉輸錯計次：成功前輸錯 4 次，成功後再輸錯 4 次仍是 403，不會被累計鎖住', async () => {
     const u = await seed();
     stubMailer();
-    for (let i = 0; i < 4; i++) await change(u.bearer, { current_password: `wrong-${i}-xxxx`, new_password: NEW });
+    for (let i = 0; i < 4; i++) {
+      expect((await change(u.bearer, { current_password: `wrong-${i}-xxxx`, new_password: NEW })).status).toBe(403);
+    }
     expect((await change(u.bearer, { current_password: OLD, new_password: NEW })).status).toBe(200);
     for (let i = 0; i < 4; i++) {
       expect((await change(u.bearer, { current_password: `again-${i}-xxxx`, new_password: 'another-pass-999' })).status).toBe(403);

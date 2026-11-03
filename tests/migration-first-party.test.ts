@@ -51,7 +51,7 @@ describe('0099 client_apps.first_party', () => {
     expect(byId.get('tripline-mobile')!.first_party).toBe(1);
   });
 
-  it('tripline-web 是 public client（沒有 secret），且 0099 當下不註冊任何 redirect_uri（第一方直接換 code；之後的回跳登記見 0102）', () => {
+  it('tripline-web 是 public client（沒有 secret），且 0099 當下不註冊任何 redirect_uri（第一方直接換 code；之後的回跳登記見 0103）', () => {
     d1 = createD1({ through: 99 });
     const row = d1.raw.prepare("SELECT client_secret_hash, redirect_uris FROM client_apps WHERE client_id = 'tripline-web'").get() as { client_secret_hash: string | null; redirect_uris: string };
     expect(row.client_secret_hash).toBeNull();

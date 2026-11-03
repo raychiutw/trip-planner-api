@@ -1,9 +1,11 @@
+import { z } from '@hono/zod-openapi';
 import type { OpenAPIHono } from '@hono/zod-openapi';
 import type { AppEnv } from '../../env';
 import { legacyRoute } from '../../legacy';
 import { ApiError } from '../../schemas/common';
 import * as S from '../../schemas/account';
 import { onRequestGet as accountAiAuthorizationGet, onRequestPost as accountAiAuthorizationPost } from '../handlers/account/ai-authorization';
+import { onRequestGet as accountAiDataConsentGet, onRequestPost as accountAiDataConsentPost, onRequestDelete as accountAiDataConsentDelete } from '../handlers/account/ai-data-consent';
 import { onRequestGet as accountConnectedAppsGet } from '../handlers/account/connected-apps';
 import { onRequestDelete as accountConnectedAppsClientIdDelete } from '../handlers/account/connected-apps/@client_id';
 import { onRequestPost as accountDeleteReauthPost, onRequestGet as accountDeleteReauthGet, onRequestDelete as accountDeleteReauthDelete } from '../handlers/account/delete-reauth';
@@ -51,6 +53,22 @@ export function registerAccountRoutes(app: OpenAPIHono<AppEnv>): void {
   legacyRoute(app, {
     method: 'post', path: '/api/account/ai-authorization', auth: 'required', handler: accountAiAuthorizationPost, summary: '授權 Tripline AI',
     docs: { responses: { 200: { description: '建立（或更新）授權；idempotent，永遠回 authorized: true', schema: S.Account_AiAuthorizationStatus }, 401: E401, 403: E403_ACCOUNT } },
+  });
+  const E409_CONSENT = { description: 'body 的 version 未知或不是目前版本（AI_CONSENT_VERSION_MISMATCH）；或目前版本的說明文字尚未填妥（AI_CONSENT_NOT_READY，GET／DELETE 不受影響）。兩者 error 內都帶 currentVersion，且不寫入', schema: z.union([S.AiConsentVersionMismatchError, S.AiConsentNotReadyError]) };
+  legacyRoute(app, {
+    method: 'get', path: '/api/account/ai-data-consent', auth: 'required', handler: accountAiDataConsentGet, summary: 'AI 資料同意：狀態與說明文字',
+    docs: { responses: { 200: { description: '同意狀態（none／valid／stale／withdrawn）、目前版本、已接受版本與時間、目前版本的說明文字、enforced', schema: S.Account_AiDataConsentState }, 401: E401, 403: E403_ACCOUNT } },
+  });
+  legacyRoute(app, {
+    method: 'post', path: '/api/account/ai-data-consent', auth: 'required', handler: accountAiDataConsentPost, summary: 'AI 資料同意：同意目前版本',
+    docs: { body: S.Account_AiDataConsentBody, responses: {
+      200: { description: '已同意（重複同意同一版冪等，不新增事件），回新狀態', schema: S.Account_AiDataConsentState },
+      400: E400('沒帶 version 或 body 不是合法 JSON'), 401: E401, 403: E403_ACCOUNT, 409: E409_CONSENT,
+    } },
+  });
+  legacyRoute(app, {
+    method: 'delete', path: '/api/account/ai-data-consent', auth: 'required', handler: accountAiDataConsentDelete, summary: 'AI 資料同意：撤回',
+    docs: { responses: { 200: { description: '已撤回（冪等；從未同意者回 none、不寫事件）。排隊中尚未開始的請求被終結；已開始的工作不保證能停，已送出的資料收不回來', schema: S.Account_AiDataConsentState }, 401: E401, 403: E403_ACCOUNT } },
   });
   legacyRoute(app, {
     method: 'get', path: '/api/account/connected-apps', auth: 'required', handler: accountConnectedAppsGet, summary: '已連線的應用程式',

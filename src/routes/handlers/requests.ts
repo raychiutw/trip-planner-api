@@ -15,6 +15,8 @@
 import { logAudit, recordEmailEvent } from '../../lib/audit';
 import { alertAdminTelegram } from '../../lib/alert';
 import { hasPermission, requireAuth, hasOpsScope, requireTripWrite } from '../../lib/permissions';
+import { assertAiConsent } from '../../lib/ai-data-consent';
+import { omitSubmitterEmail } from '../../lib/request-privacy';
 import { AppError } from '../../errors';
 import { json, parseJsonBody } from '../../lib/utils';
 import type { Env } from '../../env';
@@ -96,11 +98,11 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
   if (isPaginated) {
     const hasMore = (results ?? []).length > limit;
     const items = hasMore ? (results ?? []).slice(0, limit) : (results ?? []);
-    return json({ items, hasMore });
+    return json({ items: items.map((r) => omitSubmitterEmail(auth, r)), hasMore });
   }
 
   // 向下相容：不帶分頁參數時回傳陣列
-  return json(results);
+  return json((results ?? []).map((r) => omitSubmitterEmail(auth, r)));
 };
 
 // POST /api/requests
@@ -123,6 +125,8 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
 
   // mode is vestigial (migration 0048 phase 1 nullable; phase 2 will DROP COLUMN).
   await requireTripWrite(env.DB, auth, tripId);
+  // AI 資料同意閘門（旗標開且文案填妥才生效）：要在去重與任何寫入之前，被擋時不得建立 request
+  await assertAiConsent(env, auth, tripId);
 
   // 30 秒去重保護：防止因網路重試或使用者重複點擊造成重複寫入。
   // 只去重「仍在跑」的請求（open/processing）——終結狀態（failed/completed）不得遮蔽合法重送：

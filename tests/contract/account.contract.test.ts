@@ -6,7 +6,16 @@
  * 而且多出任何未宣告的欄位都會失敗（見 tests/contract/support.ts）。
  * 另外記錄每條路由實際觸發過的狀態碼，最後一個測試要求「文件列出的每個狀態碼都有被觸發過」。
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+
+// 文案是否填妥可切換：預設填妥（讓 POST 同意可成功）；contract.textReady.on=false 時回到真實的未填妥文案
+const textReady = vi.hoisted(() => ({ on: true }));
+vi.mock('../../src/lib/ai-data-consent-text', async (importOriginal) => {
+  const m = await importOriginal<typeof import('../../src/lib/ai-data-consent-text')>();
+  const fill = (s: string) => s.replaceAll('{{RESPONSIBLE_PARTY}}', 'x').replaceAll('{{CONTACT_EMAIL}}', 'x@example.test').replaceAll('{{TERMS_URL}}', 'https://example.test');
+  const texts = new Proxy(m.CONSENT_TEXTS, { get: (t, k) => (textReady.on && typeof k === 'string' && t[k] ? JSON.parse(fill(JSON.stringify(t[k]))) : (t as any)[k]) });
+  return { ...m, CONSENT_TEXTS: texts };
+});
 import { createTestDb, disposeMiniflare } from '../baseline/setup';
 import { mockEnv, seedTrip, seedUser, userIdFor } from '../baseline/helpers';
 import { createApi, type Api, type RequestOptions } from '../baseline/http';
@@ -25,6 +34,9 @@ import { expectContract } from './support';
 const ROUTES: Array<[string, string, 'required' | 'optional']> = [
   ['get', '/api/account/ai-authorization', 'required'],
   ['post', '/api/account/ai-authorization', 'required'],
+  ['get', '/api/account/ai-data-consent', 'required'],
+  ['post', '/api/account/ai-data-consent', 'required'],
+  ['delete', '/api/account/ai-data-consent', 'required'],
   ['get', '/api/account/connected-apps', 'required'],
   ['delete', '/api/account/connected-apps/{client_id}', 'required'],
   ['get', '/api/account', 'required'],
@@ -173,6 +185,60 @@ describe('/api/account/ai-authorization', () => {
     for (const m of ['get', 'post']) {
       await expectApiError(await hit('/api/account/ai-authorization', m, '/api/account/ai-authorization'), 401, 'AUTH_REQUIRED');
       await expectApiError(await hit('/api/account/ai-authorization', m, '/api/account/ai-authorization', { bearer: thirdPartyBearer }), 403, 'PERM_DENIED');
+    }
+  });
+});
+
+// ───────── ai-data-consent ─────────
+
+describe('/api/account/ai-data-consent', () => {
+  const R = '/api/account/ai-data-consent';
+  it('GET 200 none → POST 200 valid（重複冪等）→ DELETE 200 withdrawn（重複冪等）；回應符合文件 schema', async () => {
+    const g = await hit(R, 'get', R, { bearer: ownerBearer });
+    expect(g.status).toBe(200);
+    const gb = await g.json();
+    expectContract(S.Account_AiDataConsentState, gb);
+    expect(gb).toMatchObject({ status: 'none', currentVersion: 'ai-data-v1', enforced: false });
+    for (let i = 0; i < 2; i++) {
+      const p = await hit(R, 'post', R, { bearer: ownerBearer, json: valid(S.Account_AiDataConsentBody, { version: 'ai-data-v1' }) });
+      expect(p.status).toBe(200);
+      const pb = await p.json();
+      expectContract(S.Account_AiDataConsentState, pb);
+      expect(pb).toMatchObject({ status: 'valid', acceptedVersion: 'ai-data-v1' });
+    }
+    for (let i = 0; i < 2; i++) {
+      const d = await hit(R, 'delete', R, { bearer: ownerBearer });
+      expect(d.status).toBe(200);
+      const db_ = await d.json();
+      expectContract(S.Account_AiDataConsentState, db_);
+      expect(db_).toMatchObject({ status: 'withdrawn', acceptedVersion: null });
+    }
+  });
+  it('POST 400（沒帶 version）／409 AI_CONSENT_VERSION_MISMATCH（未知版本，帶 currentVersion）', async () => {
+    invalid(S.Account_AiDataConsentBody, {});
+    await expectApiError(await hit(R, 'post', R, { bearer: ownerBearer, json: {} }), 400, 'DATA_VALIDATION');
+    const res = await hit(R, 'post', R, { bearer: ownerBearer, json: { version: 'ai-data-v999' } });
+    expect(res.status).toBe(409);
+    const b = await res.json();
+    expectContract(S.AiConsentVersionMismatchError, b);
+    expect((b as { error: { currentVersion: string } }).error.currentVersion).toBe('ai-data-v1');
+  });
+  it('POST 409 AI_CONSENT_NOT_READY：文案尚未填妥時不記錄同意（帶 currentVersion），GET／DELETE 不受影響', async () => {
+    textReady.on = false;
+    try {
+      const res = await hit(R, 'post', R, { bearer: strangerBearer, json: { version: 'ai-data-v1' } });
+      expect(res.status).toBe(409);
+      const b = await res.json();
+      expectContract(S.AiConsentNotReadyError, b);
+      expect((b as { error: { code: string; currentVersion: string } }).error).toMatchObject({ code: 'AI_CONSENT_NOT_READY', currentVersion: 'ai-data-v1' });
+      expect((await api.get(R, { bearer: strangerBearer })).status).toBe(200);
+    } finally { textReady.on = true; }
+  });
+  it('未登入 → 401；第三方 client／受限 token → 403 PERM_DENIED', async () => {
+    for (const m of ['get', 'post', 'delete']) {
+      const anon: RequestOptions = m === 'post' ? { json: { version: 'ai-data-v1' } } : {};
+      await expectApiError(await hit(R, m, R, anon), 401, 'AUTH_REQUIRED');
+      await expectApiError(await hit(R, m, R, { bearer: thirdPartyBearer, json: m === 'post' ? { version: 'ai-data-v1' } : undefined }), 403, 'PERM_DENIED');
     }
   });
 });

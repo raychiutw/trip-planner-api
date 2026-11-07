@@ -298,6 +298,16 @@ describe('GET／POST /api/trips/:id/health-check', () => {
   it('422：空行程不可健檢', () => err('POST', t, `/api/trips/${EMPTY}/health-check`, 422, { as: OWNER }));
 });
 
+describe('GET /api/trips/:id/ai-authorization', () => {
+  const t = '/api/trips/{id}/ai-authorization';
+  it('200：只回兩個布林', async () => {
+    const body = await check('GET', t, `/api/trips/${PUB}/ai-authorization`, 200, S.Trips_AiAuthorizationStatus, { as: OWNER }) as { ownerAuthorized: boolean; isOwner: boolean };
+    expect(body).toEqual({ ownerAuthorized: false, isOwner: true });
+  });
+  it('401：未登入', () => err('GET', t, `/api/trips/${PUB}/ai-authorization`, 401));
+  it('403：非成員', () => err('GET', t, `/api/trips/${PUB}/ai-authorization`, 403, { as: STRANGER }));
+});
+
 describe('GET /api/trips/:id/health', () => {
   const t = '/api/trips/{id}/health';
   it('200：POI 健康度（鍵名為 snake_case）', async () => {

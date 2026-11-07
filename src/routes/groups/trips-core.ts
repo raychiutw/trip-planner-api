@@ -12,6 +12,7 @@ import { onRequestGet as auditGet } from '../handlers/trips/@id/audit';
 import { onRequestPost as rollbackPost } from '../handlers/trips/@id/audit/@aid/rollback';
 import { onRequestPost as importPost } from '../handlers/trips/import';
 import { onRequestGet as healthCheckGet, onRequestPost as healthCheckPost } from '../handlers/trips/@id/health-check';
+import { onRequestGet as tripAiAuthorizationGet } from '../handlers/trips/@id/ai-authorization';
 import { onRequestGet as healthGet } from '../handlers/trips/@id/health';
 import { onRequestPost as recomputePost } from '../handlers/trips/@id/recompute-travel';
 import { onRequestPatch as segmentPatch } from '../handlers/trips/@id/segments/@sid';
@@ -137,6 +138,14 @@ export function registerTripsCoreRoutes(app: OpenAPIHono<AppEnv>): void {
     method: 'get', path: '/api/trips/:id/health-check', auth: 'required', handler: healthCheckGet, summary: '行程健檢結果',
     docs: { responses: {
       200: { description: '最新的 AI 健檢報告；尚未健檢時 report 為 null。註冊為 optional，但 handler 一律要求登入', schema: S.Trips_HealthCheckResult },
+      401: E.unauthorized,
+      403: { description: '沒有此行程的讀取權限', schema: ApiError },
+    } },
+  });
+  legacyRoute(app, {
+    method: 'get', path: '/api/trips/:id/ai-authorization', auth: 'required', handler: tripAiAuthorizationGet, summary: '行程擁有者的 AI 授權狀態',
+    docs: { responses: {
+      200: { description: '行程擁有者是否已授權 Tripline AI（簽發 token 查的是擁有者，不是登入者）；isOwner 表示登入者是否就是擁有者。只回布林', schema: S.Trips_AiAuthorizationStatus },
       401: E.unauthorized,
       403: { description: '沒有此行程的讀取權限', schema: ApiError },
     } },

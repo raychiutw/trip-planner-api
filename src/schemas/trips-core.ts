@@ -328,3 +328,8 @@ export const Trips_RecomputeResult = z.object({
   modeBreakdown: z.record(z.string(), z.number()),
   errorsDetail: z.array(z.object({ entryId: z.number().int(), message: z.string() })),
 }).openapi('Trips_RecomputeResult');
+
+export const Trips_AiAuthorizationStatus = z.object({
+  ownerAuthorized: z.boolean().openapi({ description: '行程擁有者是否已授權 Tripline AI（tp-request）' }),
+  isOwner: z.boolean().openapi({ description: '登入者是否就是行程擁有者' }),
+}).openapi('Trips_AiAuthorizationStatus');

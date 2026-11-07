@@ -34,6 +34,7 @@ describe('已登入的回應帶 private, no-store', () => {
     ['行程列表（optional auth）', '/api/trips'],
     ['我的行程', '/api/my-trips'],
     ['AI 授權狀態', '/api/account/ai-authorization'],
+    ['行程擁有者的 AI 授權狀態', '/api/trips/t1/ai-authorization'],
     ['行程筆記彙整（/notes）', '/api/trips/t1/notes'],
     ['行程筆記 AI 狀態（/notes/ai-state）', '/api/trips/t1/notes/ai-state'],
   ])('%s', async (_n, path) => {

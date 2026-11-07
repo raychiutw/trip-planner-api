@@ -93,11 +93,13 @@ const tokenRows = async (io: Io, uid: string) =>
 export interface Result { name: string; ok: boolean; detail: string }
 
 /** 自動情境。每項獨立（各用自己的測試帳號），失敗不中斷其餘項；無論如何最後清理。 */
-export async function runScenarios(io: Io): Promise<Result[]> {
-  const run = hex();
+export async function runScenarios(io: Io, only?: string): Promise<Result[]> {
+  // run 與 email 都要短：erasure 的 rate_limit_buckets LIKE '%:<email>' 超過 50 bytes 會被 D1 拒絕（見 PR 說明的既有缺陷）。
+  const run = randomBytes(3).toString('hex');
   const results: Result[] = [];
   const del = (a: Actor, body: unknown) => io.http('DELETE', '/api/account', a.token, body);
   const step = async (name: string, fn: () => Promise<[boolean, string]>) => {
+    if (only && !name.includes(only)) return;
     try { const [ok, detail] = await fn(); results.push({ name, ok, detail }); } catch (e) { results.push({ name, ok: false, detail: `例外：${(e as Error).message}` }); }
   };
 
@@ -159,7 +161,7 @@ export async function runScenarios(io: Io): Promise<Result[]> {
       const second = await del(a, { challengeId: id });
       const gone = !(await userExists(io, a.uid));
       return [first.status >= 500 && mid.kept && mid.status === 'verified' && mid.tokens >= 2 && second.status === 200 && gone,
-        `失敗那次 ${first.status}（帳號仍在=${mid.kept}、challenge=${mid.status}、token/challenge 列=${mid.tokens}）；重試 ${second.status}、帳號已刪=${gone}`];
+        `失敗那次 ${first.status}（帳號仍在=${mid.kept}、challenge=${mid.status}、token/challenge 列=${mid.tokens}）；重試 ${second.status}（${second.json?.error?.code ?? 'ok'}）、帳號已刪=${gone}`];
     });
 
     await step('並行兩次 DELETE', async () => {
@@ -228,7 +230,7 @@ async function main(argv: string[]): Promise<number> {
   const io = realIo(target);
   if (argv.includes('--cleanup')) { await cleanup(io); console.log('已清理前綴資料'); return 0; }
   if (argv.includes('--manual-start') || argv.includes('--manual-check')) return manual(io, argv);
-  const results = await runScenarios(io);
+  const results = await runScenarios(io, argv.find((a) => a.startsWith('--only='))?.slice(7));
   for (const r of results) console.log(`${r.ok ? 'PASS' : 'FAIL'}  ${r.name} — ${r.detail}`);
   return results.every((r) => r.ok) ? 0 : 1;
 }

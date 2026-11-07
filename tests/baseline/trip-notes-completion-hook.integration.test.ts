@@ -269,6 +269,83 @@ describe('PATCH /requests/:id — notes generation completion hook', () => {
     });
   });
 
+  describe('遲到完成的 reply 改寫（工作已被收屍）', () => {
+    const JSON_REPLY = JSON.stringify([{ title: '遲到', content: '遲到的結果', section: '一般' }]);
+    const LATE_NOTICE = (id: string) =>
+      `AI 生成已逾時（超過 10 分鐘），結果沒有套用到行程筆記。\n\n可重試：[前往行程筆記 →](/trip/${id}/notes)`;
+
+    /** 讓工作在遲到的完成通知到達前已過期（timeout_at 在過去）。 */
+    async function pastDeadline(requestId: number) {
+      await db.prepare(
+        `UPDATE trip_note_ai_jobs SET status = 'processing', timeout_at = datetime('now', '-1 minute')
+         WHERE request_id = ?`,
+      ).bind(requestId).run();
+    }
+    async function jobStatus(requestId: number) {
+      const row = await db.prepare('SELECT status FROM trip_note_ai_jobs WHERE request_id = ?')
+        .bind(requestId).first<{ status: string }>();
+      return row!.status;
+    }
+    async function readReply(requestId: number) {
+      const row = await db.prepare('SELECT reply, status FROM trip_requests WHERE id = ?')
+        .bind(requestId).first<{ reply: string; status: string }>();
+      return row!;
+    }
+
+    it('逾時後才完成 → reply 改寫成人話，且不套用遲到結果', async () => {
+      const { requestId } = await createJobAndRequest('tips');
+      await pastDeadline(requestId);
+      await callPatch(requestId, { status: 'completed', reply: JSON_REPLY });
+      expect(await jobStatus(requestId)).toBe('timed_out');
+      expect((await readReply(requestId)).reply).toBe(LATE_NOTICE(tripId));
+      const notes = (await readTrip(getNotes)).pretripNotes as Array<{ title: string }>;
+      expect(notes.some((n) => n.title === '遲到')).toBe(false);
+    });
+
+    it('已 completed 的重複終結通知 → reply 不動', async () => {
+      const { requestId } = await createJobAndRequest('tips');
+      await callPatch(requestId, { status: 'completed', reply: JSON_REPLY });
+      const summary = (await readReply(requestId)).reply;
+      expect(summary).toContain('AI 生成完成');
+      await callPatch(requestId, { status: 'completed' });
+      expect(await jobStatus(requestId)).toBe('completed');
+      expect((await readReply(requestId)).reply).toBe(summary);
+      // 重複通知即使又帶原始 JSON，已 completed 的工作也不可被當成逾時改寫。
+      await callPatch(requestId, { status: 'completed', reply: JSON_REPLY });
+      expect((await readReply(requestId)).reply).not.toBe(LATE_NOTICE(tripId));
+    });
+
+    it('逾時後才完成但 reply 已是摘要或一般說明 → 不動', async () => {
+      for (const reply of ['AI 生成完成：新增 3 則\n\n[前往行程筆記 →](/trip/x/notes)', '這是一段一般中文說明', '[不是 JSON', '{"title":"物件"}', '123']) {
+        const { requestId } = await createJobAndRequest('tips');
+        await pastDeadline(requestId);
+        await callPatch(requestId, { status: 'completed', reply });
+        expect(await jobStatus(requestId)).toBe('timed_out');
+        expect((await readReply(requestId)).reply).toBe(reply);
+      }
+    });
+
+    it('request 已 completed、工作先被標逾時，遲到通知也改寫', async () => {
+      const { requestId } = await createJobAndRequest('tips');
+      await db.prepare(
+        `UPDATE trip_note_ai_jobs SET status = 'timed_out', error_code = 'NOTES_AI_JOB_STALE' WHERE request_id = ?`,
+      ).bind(requestId).run();
+      await db.prepare(`UPDATE trip_requests SET status = 'completed', reply = ? WHERE id = ?`)
+        .bind(JSON_REPLY, requestId).run();
+      await callPatch(requestId, { status: 'completed' });
+      expect((await readReply(requestId)).reply).toBe(LATE_NOTICE(tripId));
+    });
+
+    it('工作仍在期限內 → 走原本套用流程', async () => {
+      const { requestId } = await createJobAndRequest('tips');
+      await callPatch(requestId, { status: 'completed', reply: JSON_REPLY });
+      expect(await jobStatus(requestId)).toBe('completed');
+      expect((await readReply(requestId)).reply).toContain('AI 生成完成');
+      const notes = (await readTrip(getNotes)).pretripNotes as Array<{ title: string }>;
+      expect(notes.some((n) => n.title === '遲到')).toBe(true);
+    });
+  });
+
   // PR27 — AI-driven INSERT 補 audit_log
   describe('PR27 audit_log on AI insert', () => {
     async function fetchAudit(tableName: string, requestId: number) {

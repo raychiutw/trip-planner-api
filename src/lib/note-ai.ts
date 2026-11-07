@@ -247,6 +247,31 @@ async function failJob(
   return (result.meta.changes ?? 0) > 0;
 }
 
+/** 工作已逾時才遲到完成：reply 仍是原始 JSON 陣列就改成人話；結果不套用。 */
+async function rewriteLateCompletionReply(
+  db: D1Database,
+  tripId: string,
+  requestId: number,
+  job: NoteAiJobRow,
+  request: Record<string, unknown>,
+): Promise<void> {
+  // 逾時入口會先把 request 標 failed，遲到的 PATCH 再覆寫 reply，所以 completed／failed 都要處理。
+  if (!['completed', 'failed'].includes(String(request.status)) || typeof request.reply !== 'string') return;
+  const current = await db.prepare('SELECT status FROM trip_note_ai_jobs WHERE id = ? AND generation = ?')
+    .bind(job.id, job.generation).first<{ status: string }>();
+  if (current?.status !== 'timed_out') return;
+  try {
+    if (!Array.isArray(JSON.parse(request.reply))) return;
+  } catch {
+    return;
+  }
+  await rewriteRequestReply(
+    db,
+    requestId,
+    `AI 生成已逾時（超過 10 分鐘），結果沒有套用到行程筆記。\n\n可重試：[前往行程筆記 →](/trip/${tripId}/notes)`,
+  );
+}
+
 export async function applyNotesGenerationCompletion(
   db: D1Database,
   tripId: string,
@@ -260,7 +285,10 @@ export async function applyNotesGenerationCompletion(
      FROM trip_note_ai_jobs
      WHERE id = ? AND generation = ? AND status IN ('pending', 'processing')`,
   ).bind(job.id, job.generation).first<NoteAiJobRow>();
-  if (!active) return;
+  if (!active) {
+    await rewriteLateCompletionReply(db, tripId, requestId, job, request);
+    return;
+  }
 
   if (request.status === 'failed') {
     const needsConsent = request.terminal_reason === 'needs_consent';

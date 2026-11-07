@@ -10,6 +10,7 @@ import type { Env } from '../env';
  *   自然不再算停滯。門檻預設 30 分鐘（agent 側 checkStall 為 20 分鐘：它在 tick 內看、較早；
  *   這裡是 agent 本身掛掉時的外部兜底，刻意放寬以免與 agent 自己的告警重複；仍須小於 REQUEST_STALE_MINUTES）。
  * - 狀態變化才發：上次狀態存 app_settings，持續停滯不重複，恢復時發一則恢復通知。
+ *   只在 Telegram 確認送出後才寫狀態；失敗則下次排程重試。
  * - Telegram 未設定 → 整個功能靜默（不查 D1、不寫狀態、不 log）。
  * - 訊息只含請求編號、數量與等待分鐘，不含 token／email／IP／使用者內容。
  */
@@ -41,14 +42,14 @@ export async function checkRequestStall(env: Env): Promise<void> {
   const isStalled = (stalled?.n ?? 0) > 0;
   if (isStalled === wasAlerted) return;
 
-  if (isStalled) {
-    await alertAdminTelegram(
+  const ok = isStalled
+    ? await alertAdminTelegram(
       env,
       `請求停滯：${stalled!.n} 筆請求超過 ${threshold} 分鐘無人處理（最久 ${stalled!.waited_min} 分鐘，請求 #${stalled!.oldest_id}）→ agent 或 Mac 可能停擺。`,
-    );
-  } else {
-    await alertAdminTelegram(env, '請求停滯已解除：待處理請求已回到門檻內或隊列已清空。');
-  }
+      )
+    : await alertAdminTelegram(env, '請求停滯已解除：待處理請求已回到門檻內或隊列已清空。');
+  // 發送失敗不寫狀態：下次排程重試，避免最後兜底的告警靜默遺失。
+  if (!ok) return;
   await env.DB
     .prepare(
       `INSERT INTO app_settings (key, value, updated_by) VALUES (?, ?, 'system:request-stall-heartbeat')

@@ -114,4 +114,31 @@ describe('checkRequestStall', () => {
     await checkRequestStall(mkEnv());
     expect(sent).toHaveLength(1);
   });
+
+  it.each([
+    ['Telegram 回 500', () => new Response('boom', { status: 500 })],
+    ['fetch 拋錯（網路／逾時）', () => { throw new Error('network'); }],
+  ])('%s：不寫已告警狀態，下一輪會再發', async (_n, fail) => {
+    insert('open', 45);
+    const ok = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn(async () => fail()));
+    await checkRequestStall(mkEnv());
+    expect(d1.raw.prepare('SELECT * FROM app_settings WHERE key = ?').all('request_stall_alerted')).toHaveLength(0);
+    vi.stubGlobal('fetch', ok);
+    await checkRequestStall(mkEnv());
+    expect(sent).toHaveLength(1);
+  });
+
+  it('恢復通知送失敗：維持已告警狀態，下一輪重發恢復通知', async () => {
+    insert('open', 45);
+    await checkRequestStall(mkEnv());
+    d1.raw.prepare("UPDATE trip_requests SET status = 'completed'").run();
+    const ok = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('x', { status: 500 })));
+    await checkRequestStall(mkEnv());
+    vi.stubGlobal('fetch', ok);
+    await checkRequestStall(mkEnv());
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toMatch(/解除/);
+  });
 });

@@ -15,7 +15,7 @@ describe.skipIf(!API_BASE_URL)('外部目標：GET /api/health', () => {
     const resp = await fetch(new URL('/api/health', API_BASE_URL));
     const body = (await resp.json()) as { status: string; checks: object; ts: string };
     expect(Object.keys(body).sort()).toEqual(['checks', 'status', 'ts']);
-    expect(Object.keys(body.checks).sort()).toEqual(['d1', 'googleMapsKey']);
+    expect(Object.keys(body.checks).sort()).toEqual(['d1', 'googleMapsKey', 'oauthSigningKey']);
     expect(Number.isNaN(Date.parse(body.ts))).toBe(false);
     expect(resp.status).toBe(body.status === 'unhealthy' ? 503 : 200);
   });

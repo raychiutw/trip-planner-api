@@ -17,6 +17,7 @@ import { createTestDb, disposeMiniflare } from './setup';
 import { mockEnv } from './helpers';
 import { createApi } from './http';
 import type { Env } from '../../src/env';
+import { keyMaterial } from '../signing-key-fixture';
 
 /**
  * D1 outage：每個 query 都 reject —— checkD1 的 catch 看到的就是這個。
@@ -50,7 +51,7 @@ describe('GET /api/health — 回應形狀', () => {
   afterAll(disposeMiniflare);
 
   const call = async (overrides: Partial<Env> = {}) => {
-    const env = mockEnv(db, { GOOGLE_MAPS_API_KEY: 'x'.repeat(20), ...overrides });
+    const env = mockEnv(db, { GOOGLE_MAPS_API_KEY: 'x'.repeat(20), OAUTH_SIGNING_PRIVATE_KEY: (await keyMaterial()).pem, ...overrides });
     const resp = await createApi({ env }).get('/api/health');
     return { resp, body: (await resp.json()) as Record<string, unknown> };
   };
@@ -58,14 +59,14 @@ describe('GET /api/health — 回應形狀', () => {
   it('回應的 key 集合就是 status / checks / ts —— 沒有 version，沒有別的', async () => {
     const { body } = await call();
     expect(Object.keys(body).sort()).toEqual(['checks', 'status', 'ts']);
-    expect(Object.keys(body.checks as object).sort()).toEqual(['d1', 'googleMapsKey']);
+    expect(Object.keys(body.checks as object).sort()).toEqual(['d1', 'googleMapsKey', 'oauthSigningKey']);
   });
 
   it('全 ok → healthy + 200', async () => {
     const { resp, body } = await call();
     expect(resp.status).toBe(200);
     expect(body.status).toBe('healthy');
-    expect(body.checks).toEqual({ d1: 'ok', googleMapsKey: 'ok' });
+    expect(body.checks).toEqual({ d1: 'ok', googleMapsKey: 'ok', oauthSigningKey: 'ok' });
   });
 
   it('缺 Google Maps key → degraded + 200（非關鍵，仍 serve 非 Maps 流量）', async () => {
@@ -82,7 +83,7 @@ describe('GET /api/health — 回應形狀', () => {
     const { resp, body } = await call({ DB: throwingDb });
     expect(resp.status).toBe(503);
     expect(body.status).toBe('unhealthy');
-    expect(body.checks).toEqual({ d1: 'fail', googleMapsKey: 'ok' });
+    expect(body.checks).toEqual({ d1: 'fail', googleMapsKey: 'ok', oauthSigningKey: 'ok' });
   });
 
   it('D1 回得來但不是 ok=1（不拋）→ 一樣 unhealthy + 503', async () => {

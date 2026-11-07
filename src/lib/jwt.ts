@@ -79,11 +79,25 @@ function pemToBytes(pem: string): Uint8Array {
 }
 
 /**
+ * 簽章金鑰的 secret 值常被貼錯：整段 PEM 被當成一行貼進後台時，換行變成字面的 `\n`（兩個字元），
+ * 或外面多包一層引號。這兩種救得回來，就救；救不回來的（PKCS1、EC、空白）照常讓匯入失敗。
+ * production 曾因此 JWKS 靜默回空、id_token 靜默不簽發（見 health 的 oauthSigningKey 檢查）。
+ */
+function normalizeSigningKeyText(raw: string): string {
+  let text = raw.trim();
+  const quoted = /^(["'])([\s\S]*)\1$/.exec(text);
+  if (quoted) text = quoted[2]!.trim();
+  // 只在 PEM 上還原字面 \n；裸 base64 不含反斜線，不受影響
+  if (text.startsWith('-----BEGIN') && text.includes('\\n')) text = text.replace(/\\r\\n|\\n/g, '\n');
+  return text;
+}
+
+/**
  * Import PKCS8 private key string into CryptoKey for RS256 signing。
  * Accepts both PEM (with headers) and raw base64 (no headers)。
  */
 export async function importPrivateKey(pkcs8: string): Promise<CryptoKey> {
-  const trimmed = pkcs8.trim();
+  const trimmed = normalizeSigningKeyText(pkcs8);
   const isPem = trimmed.startsWith('-----BEGIN');
   const bytes = isPem ? pemToBytes(trimmed) : base64urlToBytes(
     trimmed.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''),

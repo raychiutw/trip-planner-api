@@ -4,6 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { createApi } from './http';
 import type { Env } from '../../src/env';
+import { keyMaterial } from '../signing-key-fixture';
 
 const JWKS = 'https://x.com/api/oauth/.well-known/jwks.json';
 
@@ -79,3 +80,27 @@ describe('GET /api/oauth/.well-known/jwks.json', () => {
     expect(json.keys).toEqual([]);
   });
 });
+
+describe('GET /api/oauth/.well-known/jwks.json — 金鑰貼錯的常見格式', () => {
+  // production 曾因金鑰值格式不對，JWKS 靜默回空、id_token 靜默不簽發。可救的格式要能用，救不了的要明確判為無效。
+  it.each([
+    ['PKCS8 PEM（正確）→ 1 把', 'pem', 1],
+    ['PKCS8 裸 base64 → 1 把', 'base64', 1],
+    ['PKCS8 PEM，CRLF 換行 → 1 把', 'crlf', 1],
+    ['PEM 換行被存成字面 \\n → 1 把', 'literalBackslashN', 1],
+    ['PEM 外面包了引號 → 1 把', 'quoted', 1],
+    ['PKCS1（BEGIN RSA PRIVATE KEY）：不支援 → 0 把', 'pkcs1Pem', 0],
+    ['EC 金鑰：不支援（只簽 RS256）→ 0 把', 'ecPem', 0],
+  ] as const)('%s', async (_name, field, expected) => {
+    const mat = await keyMaterial();
+    const res = await get({ OAUTH_SIGNING_PRIVATE_KEY: mat[field] });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { keys: unknown[] }).keys).toHaveLength(expected);
+  });
+
+  it('只有空白／換行 → keys=0', async () => {
+    const res = await get({ OAUTH_SIGNING_PRIVATE_KEY: '\n' });
+    expect(((await res.json()) as { keys: unknown[] }).keys).toHaveLength(0);
+  });
+});
+

@@ -108,7 +108,9 @@ export async function eraseUserAccount(db: D1Database, userId: string): Promise<
   for (const table of USER_ORPHAN_TABLES) add(table, `DELETE FROM ${table} WHERE user_id = ?`, userId);
   add('oauth_models', OAUTH_MODELS_ERASE_SQL, userId, userId);
   if (user?.email) {
-    add('rate_limit_buckets', 'DELETE FROM rate_limit_buckets WHERE bucket_key LIKE ?', `%:${user.email}`);
+    // 不用 LIKE：D1 的 pattern 上限 50 bytes，email 超過約 48 字元就整批 500、帳號刪不掉（trip-planner#1630）。
+    // 以結尾字串精確比對；lower() 與 LIKE 同為只折疊 ASCII，email 內的 % _ 是字面字元。
+    add('rate_limit_buckets', 'DELETE FROM rate_limit_buckets WHERE lower(substr(bucket_key, -length(?1))) = lower(?1)', `:${user.email}`);
     for (const table of ['requests', 'trip_requests']) {
       add(table, `DELETE FROM ${table} WHERE submitted_by = ?`, user.email);
     }

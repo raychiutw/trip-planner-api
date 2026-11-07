@@ -17,6 +17,9 @@ export function createD1(opts: { through?: number } = {}): { db: D1Database; raw
   for (const f of files.filter((x) => opts.through === undefined || num(x) <= opts.through)) raw.exec(fs.readFileSync(path.join(dir, f), 'utf8'));
   /** 接著套用編號大於 n 的 migration（測試「套用當下資料庫裡已有資料」的情境）。 */
   const applyMigrationsAfter = (n: number) => { for (const f of files.filter((x) => num(x) > n)) raw.exec(fs.readFileSync(path.join(dir, f), 'utf8')); };
+  // 真實 D1 的 LIKE／GLOB pattern 上限是 50 bytes（超過報 `LIKE or GLOB pattern too complex`），node:sqlite 預設 50000，
+  // 不對齊的話測不出這類 500。migrations 內有較長的 pattern，所以套完 migrations 後才收緊。
+  raw.limits.likePatternLength = 50;
   const prepare = (sql: string) => {
     let params: unknown[] = [];
     const isRead = /^\s*(SELECT|WITH|PRAGMA)\b/i.test(sql) || /\bRETURNING\b/i.test(sql);

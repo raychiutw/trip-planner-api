@@ -31,6 +31,8 @@ export interface Env {
   EMAIL_FROM?: string;
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_CHAT_ID?: string;
+  /** 請求停滯告警門檻（分鐘，預設 30）；見 src/lib/request-stall-heartbeat.ts。 */
+  REQUEST_STALL_THRESHOLD_MINUTES?: string;
   GOOGLE_CLOUD_PROJECT_ID?: string;
   GOOGLE_CLOUD_SA_KEY?: string;
   /** companion gate 鎖定的 OAuth client_id（tp-request）。 */

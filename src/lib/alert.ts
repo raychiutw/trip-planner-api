@@ -9,6 +9,7 @@
  * - env missing → console.warn + return（不 throw，避免影響 caller）
  * - fetch throw / non-2xx → console.error + return（fire-and-forget alert）
  * - 5s abort timeout
+ * - 回傳 true＝Telegram 確認送出；未設定或失敗＝false（呼叫端可據此重試，既有呼叫端忽略即可）
  *
  * Q10 decision: only Bearer auth on mailer endpoint, no IP ACL.
  * Q12 decision: no rate limit per IP.
@@ -21,7 +22,7 @@ interface AlertEnv {
   TELEGRAM_CHAT_ID?: string;
 }
 
-export async function alertAdminTelegram(env: AlertEnv, message: string): Promise<void> {
+export async function alertAdminTelegram(env: AlertEnv, message: string): Promise<boolean> {
   const token = env.TELEGRAM_BOT_TOKEN;
   const chatId = env.TELEGRAM_CHAT_ID;
   if (!token || !chatId) {
@@ -31,7 +32,7 @@ export async function alertAdminTelegram(env: AlertEnv, message: string): Promis
       hasToken: !!token,
       hasChatId: !!chatId,
     });
-    return;
+    return false;
   }
   // 不 log bot token（連前綴都不行）與 chat id；只留訊息長度與耗時，足以追呼叫鏈
   console.log('[alert] sending', { msgLen: message.length });
@@ -56,9 +57,10 @@ export async function alertAdminTelegram(env: AlertEnv, message: string): Promis
         body: errText.slice(0, 200),
         elapsedMs,
       });
-      return;
+      return false;
     }
     console.log('[alert] sent OK', { status: res.status, elapsedMs });
+    return true;
   } catch (err) {
     const elapsedMs = Date.now() - t0;
     console.error('[alert] Telegram fetch failed', {
@@ -66,6 +68,7 @@ export async function alertAdminTelegram(env: AlertEnv, message: string): Promis
       elapsedMs,
       aborted: ctrl.signal.aborted,
     });
+    return false;
   } finally {
     clearTimeout(timer);
   }

@@ -23,6 +23,8 @@ export const APP_SETTINGS_SCHEMA: Record<string, AppSettingType> = {
   // hysteresis thresholds (migration 0051)
   // POI lifecycle backfill state
   pois_backfill_resume_id: 'integer',
+  // 請求停滯告警上次狀態（#1623）
+  request_stall_alerted: 'boolean',
 };
 
 /** Parse a TEXT value into expected type. Throws on type mismatch. */

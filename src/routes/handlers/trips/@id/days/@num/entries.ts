@@ -79,6 +79,8 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
         lat: (body.lat as number | undefined) ?? null,
         lng: (body.lng as number | undefined) ?? null,
         rating: (body.rating as number | undefined) ?? null,
+        // #1598: fill-null，已有 place_id 的 POI 不覆寫
+        place_id: typeof body.place_id === 'string' && body.place_id.trim() ? body.place_id.trim() : null,
         // v2.31.94: forward body.source to pois.source as dedup/audit signal.
         source: (typeof body.source === 'string' && body.source) || 'ai',
       },

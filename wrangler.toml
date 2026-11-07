@@ -40,3 +40,10 @@ binding = "DB"
 database_name = "trip-planner-db"
 database_id = "d61c42d5-8083-4e18-9b6c-70e133e37322"
 migrations_dir = "migrations"
+
+# 外部心跳（trip-planner#1623）：每 10 分鐘查請求是否長時間無人處理，停滯時以 Telegram 告警。
+# ⚠ Cron Trigger 只在 production 設定；staging（頂層）刻意不設。deploy.yml 只部署 staging，
+#   所以這段要 production 手動 `wrangler deploy --env production` 才會生效。
+#   另需 `wrangler secret put TELEGRAM_BOT_TOKEN|TELEGRAM_CHAT_ID --env production`；未設定時 scheduled 靜默。
+[env.production.triggers]
+crons = ["*/10 * * * *"]

@@ -3,9 +3,10 @@
 `trip-planner-agent` 產生、本 repo 驗證的契約快照（agent issue #5：單一 repo 的 CI 看不到對方）。
 
 - 來源 repo：`raychiutw/trip-planner-agent`
-- 來源 commit：`910b76c130a14851af6a362e179abe0378f47d9d`（`contract/api-contract.json`）
-- 內容：`dailyCheckSql`（daily-check 實際送給 D1 的 SQL）、`companionTools`（MCP server 中 `companion: true` 的工具）
-- 驗證：`tests/agent-contract/*.test.ts`
+- 來源 commit：`cc03e66bb5e6faf6163f22c3c41830e0e304f648`（`contract/api-contract.json`）
+- 內容：`dailyCheckSql`（daily-check 實際送給 D1 的 SQL）、`companionTools`（MCP server 中 `companion: true` 的工具）、`limits.requestWorkerMaxMinutes`（worker 最長執行時間）
+- 驗證：`tests/agent-contract/*.test.ts`（`cross-repo-guards.test.ts` 守排除字串、幽靈預算 key、worker 逾時 < `REQUEST_STALE_MINUTES`）
+- 不同步的提示：agent 端 `tests/unit/api-contract-export.test.ts` 在快照過期時轉紅；本 repo 快照欠缺欄位（如 `limits`）時，測試訊息會指示重跑 `export:contract`
 
 ## 更新方式
 

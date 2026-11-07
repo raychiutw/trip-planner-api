@@ -349,7 +349,7 @@ describe('/openapi.json 對這組每條路由的描述', () => {
     { method: 'get', path: '/api/admin/maps-settings', auth: 'required', body: false, ok: [200], scope: 'ops:maps' },
     { method: 'post', path: '/api/admin/maps-unlock', auth: 'required', body: false, ok: [200], scope: 'ops:maps' },
     { method: 'get', path: '/api/admin/pois-due-refresh', auth: 'required', body: false, ok: [200], scope: 'ops:poi', query: ['limit'] },
-    { method: 'get', path: '/api/admin/pois-pending-place-id', auth: 'required', body: false, ok: [200], scope: 'ops:poi', query: ['limit'] },
+    { method: 'get', path: '/api/admin/pois-pending-place-id', auth: 'required', body: false, ok: [200], scope: 'ops:poi', query: ['limit', 'after_id'] },
     { method: 'get', path: '/api/admin/quota-estimate', auth: 'required', body: false, ok: [200], scope: 'ops:maps' },
   ];
   let paths: Record<string, Record<string, Op>>;

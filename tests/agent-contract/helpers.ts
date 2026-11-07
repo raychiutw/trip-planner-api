@@ -5,6 +5,7 @@ export interface AgentContract {
   version: number;
   dailyCheckSql: Array<{ source: string; sql: string[]; skipped?: string }>;
   companionTools: Array<{ name: string; method: string; path: string }>;
+  limits?: { requestWorkerMaxMinutes?: number };
 }
 
 export const contract: AgentContract = JSON.parse(

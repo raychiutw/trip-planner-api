@@ -80,5 +80,8 @@
       "method": "PATCH",
       "path": "/api/trips/{tripId}/entries/{eid}/master"
     }
-  ]
+  ],
+  "limits": {
+    "requestWorkerMaxMinutes": 90
+  }
 }

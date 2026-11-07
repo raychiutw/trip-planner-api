@@ -207,7 +207,7 @@ function realIo(t: Target): Io {
 }
 
 async function manual(io: Io, argv: string[]): Promise<number> {
-  const uid = `${PREFIX}manual`;
+  const uid = `${PREFIX}x-manual`;
   if (argv.includes('--manual-start')) {
     const sub = argv.find((a) => a.startsWith('--google-sub='))?.slice(13);
     if (!sub) { console.error('需要 --google-sub=<受控 Google 帳號的 sub>'); return 2; }

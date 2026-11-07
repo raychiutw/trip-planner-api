@@ -94,6 +94,9 @@ export const Admin_MapsSettings = z.object({
 export const Admin_LimitQuery = z.object({
   limit: z.coerce.number().int().optional().describe('預設 50；due-refresh 上限 200、pending-place-id 上限 500'),
 });
+export const Admin_PoisPendingPlaceIdQuery = Admin_LimitQuery.extend({
+  after_id: z.coerce.number().int().optional().describe('游標：只回 id 大於該值的列（id 升冪）'),
+});
 export const Admin_PoisDueRefresh = z.object({
   rows: z.array(z.object({
     id: z.number().int(),
@@ -107,6 +110,8 @@ export const Admin_PoisPendingPlaceId = z.object({
     id: z.number().int(),
     name: z.string(),
     address: z.string().nullable(),
+    lat: z.number().nullable().describe('無座標為 null'),
+    lng: z.number().nullable().describe('無座標為 null'),
     place_id: z.null().describe('恆為 null（篩選條件）'),
   })),
 }).openapi('Admin_PoisPendingPlaceId');

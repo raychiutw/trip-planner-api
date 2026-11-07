@@ -381,6 +381,15 @@ describe('POST /api/trips/:id/recompute-travel', () => {
     vi.mocked(assertGoogleAvailable).mockRejectedValueOnce(new AppError('MAPS_LOCKED'));
     await err('POST', t, `/api/trips/${PUB}/recompute-travel`, 503, { as: OWNER });
   });
+  it('429：帳號重算交通超過頻率上限', async () => {
+    const key = `recompute-travel:user:${userIdFor(OWNER)}`;
+    await db.prepare('INSERT OR REPLACE INTO rate_limit_buckets (bucket_key, count, window_start, locked_until) VALUES (?, 30, ?, NULL)').bind(key, Date.now()).run();
+    try {
+      await err('POST', t, `/api/trips/${PUB}/recompute-travel`, 429, { as: OWNER });
+    } finally {
+      await db.prepare('DELETE FROM rate_limit_buckets WHERE bucket_key = ?').bind(key).run();
+    }
+  });
 });
 
 /* ───────────── 文件本身 ───────────── */

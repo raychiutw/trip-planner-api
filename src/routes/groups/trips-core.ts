@@ -167,6 +167,7 @@ export function registerTripsCoreRoutes(app: OpenAPIHono<AppEnv>): void {
       400: E.badRequest,
       401: E.unauthorized,
       403: { description: '沒有此行程的寫入權限', schema: ApiError },
+      429: { description: '單一帳號重算交通超過頻率上限（SYS_RATE_LIMIT，帶 Retry-After 等待秒數）', schema: ApiError },
       502: { description: '伺服器未設定 GOOGLE_MAPS_API_KEY（MAPS_UPSTREAM_FAILED）', schema: ApiError },
       503: { description: '本月 Google API 配額已用完（MAPS_LOCKED）', schema: ApiError },
     } },

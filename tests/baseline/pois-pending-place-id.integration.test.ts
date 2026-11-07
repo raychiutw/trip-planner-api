@@ -53,7 +53,7 @@ describe('pois-pending-place-id（#1608）', () => {
       if (rows.length === 0) break;
       expect(rows.length).toBeLessThanOrEqual(2);
       seen.push(...rows.map((r) => r.id));
-      cursor = rows[rows.length - 1].id;
+      cursor = rows[rows.length - 1]!.id;
     }
     expect(seen.length).toBe(3);
     expect(seen).toEqual([...seen].sort((a, b) => a - b));
@@ -62,7 +62,7 @@ describe('pois-pending-place-id（#1608）', () => {
 
   it('after_id 邊界：最後一筆之後為空；省略時等同從頭', async () => {
     const all = await list(`after_id=${startId}`);
-    expect(await list(`after_id=${all[all.length - 1].id}`)).toEqual([]);
+    expect(await list(`after_id=${all[all.length - 1]!.id}`)).toEqual([]);
     expect((await list('limit=500')).length).toBeGreaterThanOrEqual(3);
   });
 

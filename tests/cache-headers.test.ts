@@ -18,6 +18,8 @@ beforeEach(() => {
   d1 = createD1();
   env = { DB: d1.db, ALLOWED_ORIGINS: '' } as Env;
   d1.raw.prepare("INSERT INTO users (id, email, status) VALUES ('u1', 'a@example.com', 'active')").run();
+  d1.raw.prepare("INSERT INTO trips (id, name, owner_user_id, published) VALUES ('t1', 'T', 'u1', 0)").run();
+  d1.raw.prepare("INSERT INTO trip_permissions (user_id, trip_id, role) VALUES ('u1', 't1', 'owner')").run();
   d1.raw.prepare('INSERT INTO oauth_models (name, id, payload, expires_at) VALUES (?, ?, ?, ?)').run(
     'AccessToken', 'tok', JSON.stringify({ client_id: 'web', user_id: 'u1', scopes: ['trips:read'], grantId: 'g1' }), Date.now() + 3600_000,
   );
@@ -32,6 +34,8 @@ describe('已登入的回應帶 private, no-store', () => {
     ['行程列表（optional auth）', '/api/trips'],
     ['我的行程', '/api/my-trips'],
     ['AI 授權狀態', '/api/account/ai-authorization'],
+    ['行程筆記彙整（/notes）', '/api/trips/t1/notes'],
+    ['行程筆記 AI 狀態（/notes/ai-state）', '/api/trips/t1/notes/ai-state'],
   ])('%s', async (_n, path) => {
     const res = await createApp().request(path, authed, env);
     expect(res.status).toBe(200);

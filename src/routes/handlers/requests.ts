@@ -16,6 +16,7 @@ import { logAudit, recordEmailEvent } from '../../lib/audit';
 import { alertAdminTelegram } from '../../lib/alert';
 import { hasPermission, requireAuth, hasOpsScope, requireTripWrite } from '../../lib/permissions';
 import { assertAiConsent } from '../../lib/ai-data-consent';
+import { consumeUserBucket, RATE_LIMITS } from '../../lib/rate-limit';
 import { omitSubmitterEmail } from '../../lib/request-privacy';
 import { AppError } from '../../errors';
 import { json, parseJsonBody } from '../../lib/utils';
@@ -143,6 +144,10 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
     // 已存在近期相同請求，回傳最新一筆（200 而非 201）
     return json(existing, 200);
   }
+
+  // #1597 每帳號頻率限制：放在去重之後（重複點擊不耗額度）、INSERT 之前；以帳號計，換句話或等過 30 秒都繞不過
+  const limited = await consumeUserBucket(env.DB, `ai-request:user:${auth.userId}`, RATE_LIMITS.AI_REQUEST_PER_USER);
+  if (limited) return limited;
 
   const result = await env.DB
     .prepare(

@@ -23,7 +23,14 @@ const SECURITY_HEADERS: Record<string, string> = {
 export const securityHeaders: MiddlewareHandler<AppEnv> = async (c, next) => {
   await next();
   for (const [k, v] of Object.entries(SECURITY_HEADERS)) c.header(k, v);
-  if (!c.res.headers.has('Cache-Control')) c.header('Cache-Control', 'no-store');
+  // 有登入身分的回應一律 private, no-store（handler 不能用 public 蓋掉）；其餘預設 no-store，handler 自訂的照舊。
+  // SSE 長連線的快取標頭由串流 handler 自己決定（與 web 的 _middleware 一致），這裡不碰。
+  const cacheControl = c.res.headers.get('Cache-Control');
+  if (!c.res.headers.get('Content-Type')?.includes('text/event-stream')) {
+    if (c.get('auth') != null) {
+      if (!cacheControl || !/private|no-store/.test(cacheControl)) c.header('Cache-Control', 'private, no-store');
+    } else if (!cacheControl) c.header('Cache-Control', 'no-store');
+  }
   c.res.headers.delete('X-Powered-By');
   c.res.headers.delete('Server');
 };

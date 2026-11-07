@@ -21,6 +21,8 @@
  *   3. 若 process 失敗 → bumpRateLimit() count++
  */
 import type { D1Database } from '@cloudflare/workers-types';
+import { buildRateLimitResponse } from '../errors';
+import { ERROR_MESSAGES } from '../types';
 
 interface RateLimitConfig {
   maxAttempts: number;
@@ -269,4 +271,28 @@ export const RATE_LIMITS = {
   // v2.42.0: clone per-IP pre-gate (defence-in-depth on top of per-user) — blocks a
   // single IP cycling throwaway accounts to amplify clone subrequests. 30/hr/IP.
   CLONE_PER_IP: { maxAttempts: 30, windowMs: 60 * 60 * 1000, lockoutMs: 60 * 60 * 1000 },
+  // #1597：AI 聊天請求每帳號 — 每筆都會喚起一次 AI 處理（額度有限）。30/hr 遠高於真人對話節奏，
+  // 超過鎖 10 分鐘（等待時間夠短，使用者回來還能繼續）。與舊入口同值，改動要兩邊同步。
+  AI_REQUEST_PER_USER: { maxAttempts: 30, windowMs: 60 * 60 * 1000, lockoutMs: 10 * 60 * 1000 },
+  // #1597：重算交通每帳號 — 整趟重算最多 ~47 次付費 Google Routes（~$5/1000）。30/hr 容得下連續編輯
+  // 行程的自動重算，worst case 每帳號每小時約 1400 次呼叫；超過鎖 10 分鐘。與舊入口同值。
+  RECOMPUTE_TRAVEL_PER_USER: { maxAttempts: 30, windowMs: 60 * 60 * 1000, lockoutMs: 10 * 60 * 1000 },
 } as const;
+
+/**
+ * 每帳號 bucket 的「檢查＋計數」：未超過回 null 並計入這一次；超過回 429
+ *（nested SYS_RATE_LIMIT + Retry-After 秒數，前端 ApiError.retryAfter 已能讀）。
+ * 第 maxAttempts+1 次起被擋；鎖定期間的請求不再延長鎖定。
+ */
+export async function consumeUserBucket(
+  db: D1Database,
+  key: string,
+  config: RateLimitConfig,
+): Promise<Response | null> {
+  const pre = await checkRateLimit(db, key, config);
+  const res = pre.ok ? await bumpRateLimit(db, key, config) : pre;
+  if (res.ok) return null;
+  return buildRateLimitResponse(res.retryAfter ?? Math.ceil(config.lockoutMs / 1000), {
+    error: { code: 'SYS_RATE_LIMIT', message: ERROR_MESSAGES.SYS_RATE_LIMIT },
+  });
+}

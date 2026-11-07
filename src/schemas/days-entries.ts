@@ -221,6 +221,7 @@ export const EntryCreateBody = z.object({
   lat: z.number().min(-90).max(90).nullable().optional().openapi({ description: 'lat／lng 必須同時提供' }),
   lng: z.number().min(-180).max(180).nullable().optional(),
   rating: z.number().nullable().optional(),
+  place_id: z.string().nullable().optional().openapi({ description: 'Google Places place_id；只在 POI 尚無 place_id 時填入，不覆寫既有值' }),
   description: z.string().nullable().optional(),
   note: z.string().nullable().optional().openapi({ description: '成為正選 POI 的備註' }),
   source: z.enum(['ai', 'google', 'favorite', 'custom', 'search', 'user-explore', 'manual']).nullable().optional().openapi({ description: '預設 ai' }),

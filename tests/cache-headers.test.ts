@@ -46,6 +46,17 @@ describe('已登入的回應帶 private, no-store', () => {
   });
 });
 
+describe('SSE 長連線不改快取標頭（與 web 的 _middleware 一致，標頭由串流 handler 自己決定）', () => {
+  it('已登入的 text/event-stream 自設 no-cache 不被覆寫成 private, no-store', async () => {
+    const app = createApp();
+    app.use('/x/*', bearerAuth, requireAuth);
+    app.get('/x/sse', () => new Response('data: 1\n\n', { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } }));
+    const res = await app.request('/x/sse', authed, env);
+    expect(res.status).toBe(200);
+    expect(cc(res)).toBe('no-cache');
+  });
+});
+
 describe('沒有登入身分的回應維持原樣（不誤傷公開端點）', () => {
   it('匿名 GET /api/public-config 仍是 public, max-age=60', async () => {
     const res = await createApp().request('/api/public-config', {}, env);

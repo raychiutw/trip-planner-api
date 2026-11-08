@@ -4,13 +4,6 @@
  */
 import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest';
 
-vi.mock('../../src/lib/oauth-client/google-id-token', () => ({
-  verifyGoogleIdToken: vi.fn(async (idToken: string) => {
-    const payloadB64 = idToken.split('.')[1]!.replace(/-/g, '+').replace(/_/g, '/');
-    return JSON.parse(atob(payloadB64 + '='.repeat((4 - (payloadB64.length % 4)) % 4)));
-  }),
-}));
-
 import { createTestDb, disposeMiniflare } from '../baseline/setup';
 import { mockEnv, seedTrip, userIdFor } from '../baseline/helpers';
 import { createApi, type Api } from '../baseline/http';
@@ -20,8 +13,8 @@ import { sha256Base64Url } from '../../src/lib/crypto';
 import { createApp } from '../../src/app';
 import { ApiError } from '../../src/schemas/common';
 import {
-  OauthMisc_AuthRequestInfo, OauthMisc_AuthorizeQuery, OauthMisc_CallbackGoogleQuery, OauthMisc_ClientInfo, OauthMisc_ClientInfoQuery,
-  OauthMisc_DownscopeBody, OauthMisc_LoginGoogleQuery, OauthMisc_MintRestrictedBody, OauthMisc_RevokeBody, OauthMisc_JwkSet, OauthMisc_OAuthError,
+  OauthMisc_AuthRequestInfo, OauthMisc_AuthorizeQuery, OauthMisc_ClientInfo, OauthMisc_ClientInfoQuery,
+  OauthMisc_DownscopeBody, OauthMisc_MintRestrictedBody, OauthMisc_RevokeBody, OauthMisc_JwkSet, OauthMisc_OAuthError,
   OauthMisc_OpenIdConfiguration, OauthMisc_RedirectTo, OauthMisc_RestrictedToken, OauthMisc_UserInfo,
 } from '../../src/schemas/oauth-misc';
 import { contractIssues, expectContract } from './support';
@@ -36,7 +29,7 @@ const PKCE = { code_challenge: 'c'.repeat(43), code_challenge_method: 'S256' };
 const OWNER = `${P}owner@test.com`;
 const SECRET = `${P}api-secret`;
 const TRIP = `${P}trip`;
-const configured = { GOOGLE_CLIENT_ID: 'gid', GOOGLE_CLIENT_SECRET: 'gsec', PUBLIC_ORIGIN: 'https://x.com', WEB_ORIGIN: WEB };
+const configured = { PUBLIC_ORIGIN: 'https://x.com', WEB_ORIGIN: WEB };
 
 let db: D1Database;
 let api: Api;
@@ -327,153 +320,6 @@ describe('logout／userinfo', () => {
   });
 });
 
-describe('login/google／callback/google', () => {
-  const start = (params: Record<string, string> = {}, env: Record<string, string> = configured) =>
-    createApi({ env: mockEnv(db, env as never) }).get(`/api/oauth/login/google?${new URLSearchParams(sent(OauthMisc_LoginGoogleQuery, { client_id: CLIENT, redirect_uri: CB, state: 'cs', ...PKCE, ...params }))}`);
-
-  it('GET login/google：302 導向 Google，query 形狀', async () => {
-    const res = track('GET login', await start());
-    expect(res.status).toBe(302);
-    const loc = new URL(res.headers.get('Location')!);
-    expect(loc.origin + loc.pathname).toBe('https://accounts.google.com/o/oauth2/v2/auth');
-    expect([...loc.searchParams.keys()].sort()).toEqual(['client_id', 'code_challenge', 'code_challenge_method', 'nonce', 'redirect_uri', 'response_type', 'scope', 'state']);
-    expect(loc.searchParams.get('redirect_uri')).toBe('https://x.com/api/oauth/callback/google');
-  });
-
-  it('GET login/google：可導回 client 的錯誤 302；不可導回 400 扁平；未設定 503 巢狀', async () => {
-    const e302 = track('GET login', await start({ scope: 'admin' }));
-    expect(e302.status).toBe(302);
-    const loc = new URL(e302.headers.get('Location')!);
-    expect(loc.origin + loc.pathname).toBe(CB);
-    expect(loc.searchParams.get('error')).toBe('invalid_scope');
-    expect(loc.searchParams.get('state')).toBe('cs');
-
-    const r400 = track('GET login', await start({ client_id: `${P}unknown` }));
-    expect(r400.status).toBe(400); await errBody(r400, OauthMisc_OAuthError);
-    const r400b = track('GET login', await start({ dpop_jkt: 'short' }));
-    expect(r400b.status).toBe(400); await errBody(r400b, OauthMisc_OAuthError);
-
-    // client_id／redirect_uri／code_challenge 在文件上是「一般登入必填」（purpose=account-delete 時不需要），
-    // 所以 schema 標為選填、description 寫明條件；handler 的實際要求由下面的 400 驗證。
-    const noRedirect = { client_id: CLIENT, ...PKCE };
-    const spec = (await (await createApp().request('/openapi.json', {}, mockEnv(db))).json()) as { paths: Record<string, { get: { parameters: Array<{ name: string; required?: boolean; description?: string }> } }> };
-    const params = spec.paths['/api/oauth/login/google']!.get.parameters;
-    for (const k of ['client_id', 'redirect_uri', 'code_challenge']) {
-      const p = params.find((x) => x.name === k)!;
-      expect(p.required, `${k} 是條件必填，不能標必填`).toBeFalsy();
-      expect(p.description, `${k} 的文件要寫明一般登入必填`).toMatch(/一般登入必填/);
-    }
-    const r400c = track('GET login', await createApi({ env: mockEnv(db, configured as never) }).get(`/api/oauth/login/google?${new URLSearchParams(noRedirect)}`));
-    expect(r400c.status).toBe(400); await errBody(r400c, OauthMisc_OAuthError);
-
-    const r503 = track('GET login', await start({}, {}));
-    expect(r503.status).toBe(503); await errBody(r503);
-  });
-
-  it('purpose=account-delete：沒帶 challenge → 403 ACCOUNT_DELETE_REAUTH_REQUIRED（ApiError 形狀）；有 challenge → 302 帶 reauth 專用的 Google 參數', async () => {
-    const env = { ...configured, ENVIRONMENT: 'production', MOBILE_OAUTH_CALLBACK_URL: 'https://mobile-callback.trip-planner-dby.pages.dev/oauth/callback' };
-    const mobileApi = createApi({ env: mockEnv(db, env as never) });
-    const noChallenge = track('GET login', await mobileApi.get(`https://x.com/api/oauth/login/google?${new URLSearchParams(sent(OauthMisc_LoginGoogleQuery, { purpose: 'account-delete' }))}`));
-    expect(noChallenge.status).toBe(403);
-    await errBody(noChallenge);
-
-    await db.prepare("INSERT INTO users (id, email, display_name) VALUES (?, ?, 'R')").bind(`${P}rea-u`, `${P}rea@example.com`).run();
-    const cid = await (await import('../../src/lib/delete-reauth')).createMobileDeleteChallenge(db, `${P}rea-u`, `${P}rea-grant`, 'tripline-mobile');
-    const ok = track('GET login', await mobileApi.get(`https://x.com/api/oauth/login/google?${new URLSearchParams(sent(OauthMisc_LoginGoogleQuery, { purpose: 'account-delete', challenge: cid }))}`));
-    expect(ok.status).toBe(302);
-    const loc = new URL(ok.headers.get('Location')!);
-    expect([...loc.searchParams.keys()].sort()).toEqual(['claims', 'client_id', 'code_challenge', 'code_challenge_method', 'max_age', 'nonce', 'prompt', 'redirect_uri', 'response_type', 'scope', 'state']);
-    expect(loc.searchParams.get('max_age')).toBe('0');
-
-    // callback：Google 取消 → 302 回 mobile callback（status=failed）；沒有 mobile 契約的環境 → 403 JSON
-    const state = loc.searchParams.get('state')!;
-    const denied = track('GET callback', await createApi({ env: mockEnv(db, env as never) }).get(`https://x.com/api/oauth/callback/google?error=access_denied&state=${state}`));
-    expect(denied.status).toBe(302);
-    expect(denied.headers.get('Location')).toBe(`${env.MOBILE_OAUTH_CALLBACK_URL}?challenge_id=${cid}&status=failed`);
-    const orphan = `${P}state-reauth-orphan`;
-    await new D1Adapter(db, 'GoogleLoginState').upsert(orphan, {
-      provider: 'google', client_id: 'tripline-mobile', redirect_uri: env.MOBILE_OAUTH_CALLBACK_URL, scopes: [], client_state: null,
-      nonce: 'n', google_code_verifier: 'gv', first_party: false, created_at: Date.now(),
-      reauth: { uid: `${P}rea-u`, challengeId: cid, grantId: `${P}rea-grant`, clientId: 'tripline-mobile' },
-    }, 300);
-    const noContract = track('GET callback', await callback(orphan, configured, 'error=access_denied')); // configured 沒有 ENVIRONMENT → 沒有 mobile 契約
-    expect(noContract.status).toBe(403);
-    await errBody(noContract);
-  });
-
-  const VERIFIER = 'v'.repeat(43);
-  const NONCE = 'nonce-ct';
-  async function putState(name: string): Promise<string> {
-    const id = `${P}state-${name}`;
-    await new D1Adapter(db, 'GoogleLoginState').upsert(id, {
-      provider: 'google', client_id: CLIENT, redirect_uri: CB, scopes: ['openid', 'email'], client_state: 'cs-1',
-      code_challenge: await sha256Base64Url(VERIFIER), code_challenge_method: 'S256',
-      nonce: NONCE, google_code_verifier: 'gv', first_party: false,
-    }, 600);
-    return id;
-  }
-  const idToken = (claims: object) => {
-    const enc = (s: string) => btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    return [enc('{"alg":"RS256"}'), enc(JSON.stringify({ nonce: NONCE, email_verified: true, ...claims })), 'sig'].join('.');
-  };
-  const googleOk = (claims: object) => vi.spyOn(global, 'fetch').mockResolvedValue(new Response(JSON.stringify({ access_token: 'a', id_token: idToken(claims), expires_in: 3600, token_type: 'Bearer' })));
-  const callback = (state: string, env: Record<string, string> = configured, extra = 'code=gc') =>
-    createApi({ env: mockEnv(db, env as never) }).get(`/api/oauth/callback/google?${new URLSearchParams(sent(OauthMisc_CallbackGoogleQuery, Object.fromEntries(new URLSearchParams(`${extra}&state=${state}`))))}`);
-  const K = 'GET callback';
-
-  it('302 成功：redirect_uri?code=&state=', async () => {
-    googleOk({ sub: `${P}sub-new`, email: `${P}new@example.com` });
-    const res = track(K, await callback(await putState('ok')));
-    expect(res.status).toBe(302);
-    const loc = new URL(res.headers.get('Location')!);
-    expect(loc.origin + loc.pathname).toBe(CB);
-    expect([...loc.searchParams.keys()].sort()).toEqual(['code', 'state']);
-    expect(loc.searchParams.get('state')).toBe('cs-1');
-  });
-
-  it('302：使用者在 Google 取消 → error=access_denied', async () => {
-    const res = track(K, await callback(await putState('deny'), configured, 'error=access_denied'));
-    expect(res.status).toBe(302);
-    const loc = new URL(res.headers.get('Location')!);
-    expect(loc.searchParams.get('error')).toBe('access_denied');
-    expect(loc.searchParams.get('state')).toBe('cs-1');
-  });
-
-  it('400 state 無效／email 未驗證、401 nonce 不符、403 停用、409 衝突、502 換 token 失敗、503 未設定', async () => {
-    docRejects(OauthMisc_CallbackGoogleQuery, { code: 'gc' });
-    const missingState = track(K, await createApi({ env: mockEnv(db, configured as never) }).get('/api/oauth/callback/google?code=gc'));
-    expect(missingState.status).toBe(400); await errBody(missingState);
-    const r400 = track(K, await callback(`${P}state-missing`));
-    expect(r400.status).toBe(400); await errBody(r400);
-
-    googleOk({ sub: `${P}sub-unv`, email: `${P}unv@example.com`, email_verified: false });
-    const r400b = track(K, await callback(await putState('unv')));
-    expect(r400b.status).toBe(400); await errBody(r400b);
-
-    googleOk({ sub: `${P}sub-nonce`, email: `${P}nonce@example.com`, nonce: 'other' });
-    const r401 = track(K, await callback(await putState('nonce')));
-    expect(r401.status).toBe(401); await errBody(r401);
-
-    await db.prepare("INSERT INTO users (id, email, email_verified_at, display_name, status) VALUES (?, ?, '2026-01-01T00:00:00.000Z', 'S', 'suspended')").bind(`${P}susp`, `${P}susp@example.com`).run();
-    await db.prepare("INSERT INTO auth_identities (user_id, provider, provider_user_id) VALUES (?, 'google', ?)").bind(`${P}susp`, `${P}sub-susp`).run();
-    googleOk({ sub: `${P}sub-susp`, email: `${P}susp@example.com` });
-    const r403 = track(K, await callback(await putState('susp')));
-    expect(r403.status).toBe(403); await errBody(r403);
-
-    await db.prepare("INSERT INTO users (id, email, email_verified_at, display_name) VALUES (?, ?, NULL, 'C')").bind(`${P}conf-u`, `${P}conflict@example.com`).run();
-    googleOk({ sub: `${P}sub-conf`, email: `${P}conflict@example.com` });
-    const r409 = track(K, await callback(await putState('conf')));
-    expect(r409.status).toBe(409); await errBody(r409);
-
-    vi.spyOn(global, 'fetch').mockResolvedValue(new Response('invalid_grant', { status: 400 }));
-    const r502 = track(K, await callback(await putState('502')));
-    expect(r502.status).toBe(502); await errBody(r502);
-
-    const r503 = track(K, await callback(await putState('503'), {}));
-    expect(r503.status).toBe(503); await errBody(r503);
-  });
-});
-
 describe('OpenAPI 文件與實測一致', () => {
   type Op = { requestBody?: unknown; responses: Record<string, { content?: Record<string, { schema: Record<string, unknown> }> }>; security?: unknown[] };
   const ROUTES: Array<[string, string, 'required' | 'none', boolean]> = [
@@ -490,8 +336,6 @@ describe('OpenAPI 文件與實測一致', () => {
     ['get', '/api/oauth/logout', 'required', false],
     ['post', '/api/oauth/logout', 'required', false],
     ['get', '/api/oauth/userinfo', 'required', false],
-    ['get', '/api/oauth/login/google', 'none', false],
-    ['get', '/api/oauth/callback/google', 'none', false],
   ];
   // 預設文件的 schema 是 { nullable: true }（任意內容）；具體的必須有 $ref／type／properties／組合關鍵字
   const isConcrete = (s: Record<string, unknown>) => ['$ref', 'type', 'properties', 'anyOf', 'oneOf', 'allOf'].some((k) => k in s);
@@ -520,7 +364,6 @@ describe('OpenAPI 文件與實測一致', () => {
       '/api/oauth/authorize/requests/{id}/approve': 'approve', '/api/oauth/authorize/requests/{id}/deny': 'deny',
       '/api/oauth/client-info': 'client-info', '/api/oauth/downscope': 'downscope', '/api/oauth/mint-restricted': 'mint-restricted',
       '/api/oauth/revoke': 'revoke', '/api/oauth/logout': 'logout', '/api/oauth/userinfo': 'userinfo',
-      '/api/oauth/login/google': 'login', '/api/oauth/callback/google': 'callback',
     };
     for (const [method, path] of ROUTES) {
       const base = keyOf[path]!;

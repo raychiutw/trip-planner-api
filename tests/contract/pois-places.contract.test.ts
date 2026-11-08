@@ -48,7 +48,7 @@ const key = (method: string, path: string) => `${method.toUpperCase()} ${path}`;
 
 beforeAll(async () => {
   db = await createTestDb();
-  env = mockEnv(db, { GOOGLE_MAPS_API_KEY: KEY, GOOGLE_CLIENT_ID: 'gid', ALLOWED_ORIGINS: 'https://trip-planner-dby.pages.dev' });
+  env = mockEnv(db, { GOOGLE_MAPS_API_KEY: KEY, ALLOWED_ORIGINS: 'https://trip-planner-dby.pages.dev' });
   api = createApi({ env });
   await seedTrip(db, { id: TRIP, owner });
   await seedUser(db, stranger);
@@ -411,7 +411,7 @@ describe('public-config（公開）', () => {
     expect(res.status).toBe(200);
     const body = await res.json() as { providers: { google: boolean } };
     expectContract(S.Pois_PublicConfigResponse, body);
-    expect(body.providers.google).toBe(true);
+    expect(body.providers.google).toBe(false); // 相容欄位：Google 登入已移除，恆為 false
   });
 });
 

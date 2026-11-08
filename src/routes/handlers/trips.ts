@@ -195,7 +195,7 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
   // 讀的是 `/api/my-trips`（TripsListPage.tsx:832），owner 由那支供應，且那支以
   // trip_permissions 為條件 —— 給的是「你有權限的行程」的 owner，本來就合理。
   // 少一個條件分支就少一種設錯的方式。
-  // display_name 同屬個資（登入時預設帶 Google 真名，見 callback/google.ts），
+  // display_name 同屬個資（可能是真名），
   // 對齊 _share.ts:154「匿名分享連結 never expose the owner's name」。
   const baseCols = `t.id AS tripId, t.name,
                     t.owner_user_id,

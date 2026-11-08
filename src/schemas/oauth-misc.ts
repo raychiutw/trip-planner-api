@@ -103,21 +103,3 @@ export const OauthMisc_UserInfo = z.object({
   avatarUrl: z.string().nullable(),
   createdAt: z.string(),
 }).openapi('OauthMisc_UserInfo');
-
-export const OauthMisc_LoginGoogleQuery = z.object({
-  purpose: z.literal('account-delete').optional().openapi({ description: '帳號刪除的 Google 重新驗證：帶 purpose=account-delete 與 challenge，其餘參數不需要（見 /api/account/delete-reauth）' }),
-  challenge: z.string().optional().openapi({ description: 'purpose=account-delete 時必填：POST /api/account/delete-reauth 發出的 challengeId' }),
-  client_id: z.string().optional().openapi({ description: '一般登入必填' }),
-  redirect_uri: z.string().optional().openapi({ description: '一般登入必填' }),
-  code_challenge: z.string().optional().openapi({ description: '一般登入必填；S256' }),
-  code_challenge_method: z.string().optional(),
-  state: z.string().optional(),
-  scope: z.string().optional(),
-  dpop_jkt: z.string().optional().openapi({ description: '43 字元 base64url；第一方 public client 可綁 DPoP' }),
-});
-
-export const OauthMisc_CallbackGoogleQuery = z.object({
-  code: z.string().optional(),
-  state: z.string(),
-  error: z.string().optional(),
-});

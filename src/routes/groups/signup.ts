@@ -64,7 +64,7 @@ export function registerSignupRoutes(app: OpenAPIHono<AppEnv>): void {
     docs: {
       body: S.Signup_EmailBody,
       responses: {
-        200: { description: '防帳號列舉：不論 email 是否存在、已驗證、僅 Google 登入，回應一律相同', schema: S.Signup_GenericMessage },
+        200: { description: '防帳號列舉：不論 email 是否存在、已驗證，回應一律相同', schema: S.Signup_GenericMessage },
         429: { description: 'VERIFY_RATE_LIMITED（per-IP 或 per-email）', schema: ApiError },
       },
     },
@@ -74,7 +74,7 @@ export function registerSignupRoutes(app: OpenAPIHono<AppEnv>): void {
     docs: {
       body: S.Signup_EmailBody,
       responses: {
-        200: { description: '防帳號列舉：不論 email 是否存在、是否為本地帳號（含僅 Google 登入），回應一律相同', schema: S.Signup_GenericMessage },
+        200: { description: '防帳號列舉：不論 email 是否存在、是否為本地帳號，回應一律相同', schema: S.Signup_GenericMessage },
         429: { description: 'FORGOT_PASSWORD_RATE_LIMITED（per-IP 或 per-email，文案統一）', schema: ApiError },
       },
     },

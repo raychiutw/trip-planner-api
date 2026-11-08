@@ -10,7 +10,6 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 ENVIRONMENT = "preview"
 PUBLIC_ORIGIN = "https://trip-planner-api.lean-lean.workers.dev"
-MOBILE_OAUTH_CALLBACK_URL = "https://mobile-callback.trip-planner-dby.pages.dev/uat/oauth/callback"
 
 # 骨架階段（T7）先綁 staging D1，只給 /api/health 做 SELECT 1。
 # 正式資料庫與 migration 的歸屬由 T15 處理，切換前不綁 production。
@@ -32,8 +31,6 @@ ENVIRONMENT = "production"
 PUBLIC_ORIGIN = "https://trip-planner-api-production.lean-lean.workers.dev"
 WEB_ORIGIN = "https://trip-planner-dby.pages.dev"
 ALLOWED_ORIGINS = "https://trip-planner-dby.pages.dev"
-# 帳號刪除的 Google 重新驗證完成後導回的 mobile app link（須與 src/lib/mobile-oauth.ts 的 production 契約一致）
-MOBILE_OAUTH_CALLBACK_URL = "https://mobile-callback.trip-planner-dby.pages.dev/oauth/callback"
 
 [[env.production.d1_databases]]
 binding = "DB"

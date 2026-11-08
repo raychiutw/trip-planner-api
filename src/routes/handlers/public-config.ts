@@ -17,7 +17,8 @@ export const onRequestGet: PagesFunction<Env> = (context) => {
   return new Response(
     JSON.stringify({
       providers: {
-        google: Boolean(env.GOOGLE_CLIENT_ID),
+        // 相容欄位：Google 登入已移除（trip-planner#1643），web 登入頁仍讀它，恆為 false。
+        google: false,
       },
       features: {
         passwordSignup: true,

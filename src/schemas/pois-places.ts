@@ -282,7 +282,7 @@ export const Pois_RouteResponse = z.object({
 }).openapi('Pois_RouteResponse');
 
 export const Pois_PublicConfigResponse = z.object({
-  providers: z.object({ google: z.boolean() }),
+  providers: z.object({ google: z.literal(false).openapi({ description: '已棄用的相容欄位（Google 登入已移除），恆為 false；舊 web 登入頁仍會讀它' }) }),
   features: z.object({
     passwordSignup: z.boolean(),
     emailVerification: z.boolean(),

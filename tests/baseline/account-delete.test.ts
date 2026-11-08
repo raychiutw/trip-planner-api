@@ -12,8 +12,8 @@
  *   - 未登入 → 401
  *   - 有密碼身分的帳號 → 必須帶密碼二次確認才可刪（不可逆操作）
  *   - 密碼錯 → 401，且**不得**動到任何資料
- *   - 無密碼帳號只靠 confirm 字串**不得**刪除（fail-closed）：必須有 verified 的 Google 重新驗證 challenge
- *     （challenge 狀態機與 Google callback 見 account-delete-reauth.test.ts）
+ *   - 沒有密碼的帳號**不得**刪除（fail-closed）：Google 重新驗證已移除（trip-planner#1643），
+ *     confirm 字串與 challengeId 都不算證明（殘留 challenge 的守門見 no-google-login.test.ts）
  *   - 成功後 → 使用者資料消失、該使用者所有 oauth_models（token／授權）被清除、既有 token 立即失效
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -175,7 +175,7 @@ describe('DELETE /api/account', () => {
       expect(await errorCode(res)).toBe('AUTH_REQUIRED');
     });
 
-    it('回報該帳號要用密碼還是確認字串', async () => {
+    it('回報該帳號有沒有密碼；reauthProvider／reauthenticated 為相容欄位，恆 null／false', async () => {
       const withPw = await seedUser('correct-horse-battery');
       const r1 = await preview(withPw);
       expect((await r1.json() as { hasPassword: boolean }).hasPassword).toBe(true);
@@ -184,12 +184,12 @@ describe('DELETE /api/account', () => {
       const r2 = await preview(oauthOnly);
       expect(await r2.json()).toMatchObject({ hasPassword: false, reauthProvider: null, reauthenticated: false });
 
-      // 無密碼但有 Google 身分 → 可用 google 重新驗證
+      // 無密碼但有 Google 身分：Google 重新驗證已移除，一樣是相容值
       const googleOnly = await seedUser();
       await db.prepare("INSERT INTO auth_identities (user_id, provider, provider_user_id) VALUES (?, 'google', ?)")
         .bind(googleOnly.id, `g-${googleOnly.id}`).run();
-      expect(await (await preview(googleOnly)).json()).toMatchObject({ hasPassword: false, reauthProvider: 'google', reauthenticated: false });
-      // 有密碼的帳號不需要 reauth，即使同時綁了 Google
+      expect(await (await preview(googleOnly)).json()).toMatchObject({ hasPassword: false, reauthProvider: null, reauthenticated: false });
+      // 有密碼的帳號即使同時綁了 Google 也一樣
       await db.prepare("INSERT INTO auth_identities (user_id, provider, provider_user_id) VALUES (?, 'google', ?)")
         .bind(withPw.id, `g-${withPw.id}`).run();
       expect(await (await preview(withPw)).json()).toMatchObject({ hasPassword: true, reauthProvider: null });
@@ -230,25 +230,13 @@ describe('DELETE /api/account', () => {
     });
   });
 
-  it('無密碼帳號只輸入確認字串仍不能刪除（fail-closed）', async () => {
-    // 這個帳號沒有 password_hash，不能要求他打密碼；只輸入確認字串也不夠，必須先完成近期的 Google 重新驗證。
+  it('沒有密碼的帳號一律不能刪除（fail-closed）：{}、confirm、不存在的 challengeId 都回 403，資料不動', async () => {
     const u = await seedUser(); // 無密碼
-
-    const refused = await del(u, {});
-    expect(refused.status, '無密碼帳號仍需確認').toBe(400);
-    expect(await errorCode(refused)).toBe('ACCOUNT_DELETE_CONFIRM_REQUIRED');
-
-    const noProof = await del(u, { confirm: 'DELETE' });
-    expect(noProof.status).toBe(403);
-    expect(await errorCode(noProof)).toBe('ACCOUNT_DELETE_REAUTH_REQUIRED');
-    expect(await userCount(u.id)).toBe(1);
-  });
-
-  it('無密碼帳號：帶了不存在的 challengeId 一樣被拒，資料不動', async () => {
-    const u = await seedUser();
-    const res = await del(u, { confirm: 'DELETE', challengeId: 'no-such-challenge' });
-    expect(res.status).toBe(403);
-    expect(await errorCode(res)).toBe('ACCOUNT_DELETE_REAUTH_REQUIRED');
+    for (const body of [{}, { confirm: 'DELETE' }, { confirm: 'DELETE', challengeId: 'no-such-challenge' }]) {
+      const res = await del(u, body);
+      expect(res.status).toBe(403);
+      expect(await errorCode(res)).toBe('ACCOUNT_DELETE_REAUTH_REQUIRED');
+    }
     expect(await userCount(u.id)).toBe(1);
   });
 });

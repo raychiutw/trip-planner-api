@@ -135,7 +135,7 @@ export const ERROR_MESSAGES: Record<ErrorCodeType, string> = {
   CHANGE_PASSWORD_CURRENT_INVALID: '目前密碼不正確',
   CHANGE_PASSWORD_TOO_SHORT: '新密碼至少 8 字元',
   CHANGE_PASSWORD_SAME: '新密碼不能和目前密碼相同',
-  CHANGE_PASSWORD_NO_PASSWORD: '此帳號沒有設定密碼（以 Google 登入）',
+  CHANGE_PASSWORD_NO_PASSWORD: '此帳號沒有設定密碼',
   CHANGE_PASSWORD_RATE_LIMITED: '嘗試次數過多，請稍後再試',
   ACCOUNT_DELETE_CONFIRM_REQUIRED: '刪除帳號需要二次確認',
   ACCOUNT_DELETE_PASSWORD_INVALID: '密碼不正確，帳號未刪除',

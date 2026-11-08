@@ -6,7 +6,7 @@
  * 這支無 auth 時走 `WHERE t.published = 1`（公開行程本來就該看得到），但 baseCols
  * 無條件 SELECT `u.email AS owner` + `u.display_name AS owner_display_name`。
  *
- * owner_display_name 一樣是個資：登入時預設帶 Google 真名（callback/google.ts），
+ * owner_display_name 一樣是個資：可能是真名，
  * 對齊 _share.ts:154「匿名連結 never expose the owner's name」。restrictTrip 降權
  * token 只該碰單一 trip，也不該撈全站 owner 清單。
  *

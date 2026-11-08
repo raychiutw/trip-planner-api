@@ -49,6 +49,7 @@ export function cleanupSql(): string[] {
   return [
     `DELETE FROM oauth_models WHERE id LIKE '${PREFIX}%' OR json_extract(payload, '$.uid') LIKE '${PREFIX}%' OR json_extract(payload, '$.user_id') LIKE '${PREFIX}%'`,
     `DELETE FROM auth_identities WHERE user_id LIKE '${PREFIX}%'`,
+    `DELETE FROM rate_limit_buckets WHERE bucket_key LIKE '${PREFIX}%'`,
     `DELETE FROM users WHERE id LIKE '${PREFIX}%'`,
   ];
 }
@@ -65,12 +66,12 @@ const FAR = 10 * 60 * 1000;
 
 interface Actor { uid: string; token: string; grantId: string }
 
-async function mkUser(io: Io, run: string, name: string, google: string | null = `${PREFIX}${run}-${name}`): Promise<Actor> {
+async function mkUser(io: Io, run: string, name: string, google: string | null = `${PREFIX}${run}-${name}`, email?: string): Promise<Actor> {
   const uid = `${PREFIX}${run}-${name}`;
   const token = `${uid}-tok-${hex()}${hex()}`;
   const grantId = `${uid}-grant`;
   const now = Date.now();
-  await io.sql(`INSERT INTO users (id, email, display_name) VALUES ('${uid}', '${uid}@smoke.invalid', 'smoke 1616')`);
+  await io.sql(`INSERT INTO users (id, email, display_name) VALUES ('${uid}', '${email ?? `${uid}@smoke.invalid`}', 'smoke 1616')`);
   if (google) await io.sql(`INSERT INTO auth_identities (user_id, provider, provider_user_id) VALUES ('${uid}', 'google', '${google}')`);
   const payload = JSON.stringify({ client_id: CLIENT, user_id: uid, grantId, scopes: ['openid'] }).replace(/'/g, "''");
   await io.sql(`INSERT INTO oauth_models (name, id, payload, expires_at) VALUES ('AccessToken', '${token}', '${payload}', ${now + FAR})`);
@@ -94,7 +95,6 @@ export interface Result { name: string; ok: boolean; detail: string }
 
 /** 自動情境。每項獨立（各用自己的測試帳號），失敗不中斷其餘項；無論如何最後清理。 */
 export async function runScenarios(io: Io, only?: string): Promise<Result[]> {
-  // run 與 email 都要短：erasure 的 rate_limit_buckets LIKE '%:<email>' 超過 50 bytes 會被 D1 拒絕（見 PR 說明的既有缺陷）。
   const run = randomBytes(3).toString('hex');
   const results: Result[] = [];
   const del = (a: Actor, body: unknown) => io.http('DELETE', '/api/account', a.token, body);
@@ -172,6 +172,19 @@ export async function runScenarios(io: Io, only?: string): Promise<Result[]> {
       const gone = !(await userExists(io, a.uid));
       // 輸家可能是 403（challenge 已 used）或 401（token 已被撤銷），但不可能兩個都成功。
       return [codes.filter((c) => c === 200).length === 1 && codes.every((c) => [200, 401, 403].includes(c)) && gone, `狀態碼 ${codes.join('／')}、帳號已刪=${gone}`];
+    });
+
+    await step('長 email 可刪除', async () => {
+      // 回歸 trip-planner#1630：email 超過約 48 bytes 時舊的 rate_limit_buckets LIKE 會讓 D1 回 500。
+      const email = `${PREFIX}${run}-longemail-${'x'.repeat(60)}@smoke.invalid`;
+      const a = await mkUser(io, run, 'longemail', undefined, email);
+      const bucket = `${PREFIX}${run}-bucket:${email}`;
+      await io.sql(`INSERT INTO rate_limit_buckets (bucket_key, count, window_start) VALUES ('${bucket}', 1, 0)`);
+      const id = await mkChallenge(io, a, 'verified');
+      const r = await del(a, { challengeId: id });
+      const gone = !(await userExists(io, a.uid));
+      const left = (await io.sql(`SELECT 1 AS x FROM rate_limit_buckets WHERE bucket_key = '${bucket}'`)).length;
+      return [r.status === 200 && gone && left === 0, `email ${email.length} bytes：DELETE ${r.status}、帳號已刪=${gone}、殘留 bucket=${left}`];
     });
 
     await step('成功後 token 撤銷', async () => {

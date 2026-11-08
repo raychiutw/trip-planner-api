@@ -140,6 +140,22 @@ describe('mint-restricted × AI 資料同意', () => {
     expect(res.status).toBe(200);
   });
 
+  it('資料同意與 ai-authorization 是兩件事：owner 與送出者資料同意都 valid，但 owner 沒有 tp-request 的 Consent grant → 仍不簽發（failure_reason 是 no_consent，不是 no_data_consent）', async () => {
+    await db.prepare("DELETE FROM oauth_models WHERE name = 'Consent' AND json_extract(payload, '$.user_id') = ?").bind(ownerId).run();
+    await seedEvent(OWNER, 'accepted'); await seedEvent(COLLAB, 'accepted');
+    const id = await seedRequest(COLLAB);
+    expect((await mint(id)).status).toBe(403);
+    expect(await tokens()).toHaveLength(0);
+    expect((await reqState(id))!.reply).not.toContain('資料同意');
+    expect((await audit()).at(-1)).toMatchObject({ failure_reason: 'no_consent' });
+  });
+
+  it('反向：owner 有 Consent grant 但沒有資料同意 → failure_reason 是 no_data_consent（兩道檢查各自獨立）', async () => {
+    const id = await seedRequest(OWNER);
+    expect((await mint(id)).status).toBe(403);
+    expect((await audit()).at(-1)).toMatchObject({ failure_reason: 'no_data_consent' });
+  });
+
   it('旗標關閉：沒有任何同意也照常簽發（行為與現況相同）', async () => {
     const res = await mint(await seedRequest(COLLAB), apiOff);
     expect(res.status).toBe(200);

@@ -334,6 +334,10 @@ describe('assertAiConsent（共用模組）', () => {
       { email: 'x@y.z', userId: null, isServiceToken: false },
     ]) await expect(assertAiConsent({ ...env('true'), DB: boom }, auth, TRIP)).resolves.toBeUndefined();
   });
+  it('isServiceToken 為 true 就豁免，即使帶了 userId（防禦性：以旗標判斷，不只靠 userId 為空）', async () => {
+    const boom = { prepare: () => { throw new Error('不應查 DB'); } } as unknown as D1Database;
+    await expect(assertAiConsent({ ...env('true'), DB: boom }, { email: 'service:x', userId: 'u', isServiceToken: true }, TRIP)).resolves.toBeUndefined();
+  });
   it('旗標關閉時不查 DB', async () => {
     const boom = { prepare: () => { throw new Error('不應查 DB'); } } as unknown as D1Database;
     await expect(assertAiConsent({ ...env(), DB: boom }, { email: 'a@b.c', userId: 'u', isServiceToken: false }, TRIP)).resolves.toBeUndefined();

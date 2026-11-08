@@ -18,7 +18,6 @@
  */
 
 import { hasPermission, requireAuth, requireTripWrite } from '../../../../lib/permissions';
-import { assertAiConsent } from '../../../../lib/ai-data-consent';
 import { AppError } from '../../../../errors';
 import { json } from '../../../../lib/utils';
 import { recordEmailEvent } from '../../../../lib/audit';
@@ -213,7 +212,6 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
 
   await requireTripWrite(env.DB, auth, tripId);
   // AI 資料同意閘門（旗標開且文案填妥才生效）：任何寫入之前
-  await assertAiConsent(env, auth, tripId);
 
   // v2.31.58 guard：empty trip（沒有任何 entry）不該觸發 AI 健檢 —
   // 浪費 Claude quota + 給 user 沒用的 findings。Frontend 也 disable

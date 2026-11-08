@@ -28,7 +28,6 @@
 import { AppError } from '../../../errors';
 import { updateRequest } from '../../../lib/request-termination';
 import { recordAuthEvent } from '../../../lib/auth-audit';
-import { consentGapAtMint } from '../../../lib/ai-data-consent';
 import { generateOpaqueToken, parseFormOrJson } from '../../../lib/utils';
 import { D1Adapter } from '../../../lib/oauth-d1-adapter';
 import type { Env } from '../../../env';
@@ -44,10 +43,6 @@ const MINTABLE_STATUSES = new Set(['open', 'processing']);
 // 沿用既有 'failed'（不新增 needs_consent 值 → 免 migration）。
 const NEEDS_CONSENT_REPLY =
   '這趟行程要用 AI 排程，需要行程擁有者先授權。請在聊天室重新送出訊息，於跳出的視窗點「授權並送出」即可。';
-
-// 資料同意缺失（ADR-0012）park 時寫回 chat 的說明：行程內容屬於擁有者，所以雙方都要同意。
-const NEEDS_DATA_CONSENT_REPLY =
-  '這個請求需要 AI 資料同意：行程擁有者與送出者都要先到「帳號設定 → AI 與資料」同意，之後再重新送出。';
 
 /** 常數時間字串比對（避免 API_SECRET 被 timing 分析）。長度不同直接 false。 */
 function constantTimeEqual(a: string, b: string): boolean {
@@ -128,32 +123,6 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
       console.error('[mint-restricted] park needs-consent request failed:', parkErr);
     }
     throw new AppError('PERM_DENIED', 'owner 未授權 tp-request（無 Consent）');
-  }
-
-  // 5.5 AI 資料同意（ADR-0012；旗標開且文案填妥才生效）：owner 與送出者都要是 valid，缺任一方就不簽發、終結請求。
-  const consentGap = await consentGapAtMint(context.env, ownerUserId, (reqRow as { submitted_by?: string | null }).submitted_by ?? null);
-  if (consentGap) {
-    await recordAuthEvent(
-      db,
-      context.request,
-      {
-        eventType: 'token_issue',
-        outcome: 'failure',
-        userId: ownerUserId,
-        clientId: TP_REQUEST_CLIENT_ID,
-        failureReason: 'no_data_consent',
-        metadata: { grant_type: 'mint-restricted', request_id: requestId, restrict_trip: tripId, missing: consentGap },
-      },
-      context.env,
-    );
-    try {
-      await updateRequest(db, { ...reqRow, id: requestId }, {
-        status: 'failed', terminalReason: 'needs_consent', reply: NEEDS_DATA_CONSENT_REPLY,
-      }, { changedBy: 'system:mint-restricted', onlyIfActive: true });
-    } catch (parkErr) {
-      console.error('[mint-restricted] park needs-data-consent request failed:', parkErr);
-    }
-    throw new AppError('PERM_DENIED', 'AI 資料同意不完整，不簽發 token');
   }
 
   // 6. 以 owner 身份簽發受限 token（無 refresh；寫入權來自 user_id + restrict_trip gate + trip_permissions，

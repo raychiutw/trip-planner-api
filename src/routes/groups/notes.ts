@@ -2,7 +2,6 @@ import type { OpenAPIHono } from '@hono/zod-openapi';
 import type { AppEnv } from '../../env';
 import { legacyRoute } from '../../legacy';
 import * as S from '../../schemas/notes';
-import { AiConsentGated403 } from '../../schemas/account';
 import { onRequestGet as notesAggregateGet } from '../handlers/trips/@id/notes';
 import { onRequestGet as aiStateGet } from '../handlers/trips/@id/notes/ai-state';
 import { onRequestPatch as maintenancePatch } from '../handlers/trips/@id/notes/@section/@rowId/maintenance';
@@ -70,8 +69,8 @@ export function registerNotesRoutes(app: OpenAPIHono<AppEnv>): void {
   legacyRoute(app, { method: 'delete', path: `${base}/:type/exclusions/:exclusionId`, auth: 'required', handler: exclusionDelete, summary: '行程筆記：移除 AI 排除項',
     docs: { responses: R({ 200: { description: '已移除', schema: S.Notes_Ok } }, 400, 401, 403, 404) } });
   legacyRoute(app, { method: 'post', path: `${base}/:type/generate`, auth: 'required', handler: generatePost, summary: '行程筆記：AI 生成',
-    docs: { responses: { ...R({
+    docs: { responses: R({
       202: { description: '新建的 AI 生成 job（pending）', schema: S.Notes_GenerateJob },
       200: { description: '同行程同類型已有進行中的 job，回該 job', schema: S.Notes_GenerateJob },
-    }, 400, 401), 403: AiConsentGated403 } } });
+    }, 400, 401, 403) } });
 }

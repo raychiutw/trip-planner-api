@@ -15,7 +15,7 @@ import { createTestDb, disposeMiniflare } from './setup';
 import { mockEnv, userIdFor } from './helpers';
 import { createApi } from './http';
 import { D1Adapter } from '../../src/lib/oauth-d1-adapter';
-import { MOBILE_PROD_REDIRECT, MOBILE_UAT_REDIRECT, MOBILE_DEV_REDIRECT } from '../../src/lib/mobile-oauth';
+import { MOBILE_PROD_REDIRECT, MOBILE_UAT_REDIRECT, MOBILE_DEV_REDIRECT, MOBILE_LEGACY_PROD_REDIRECT, MOBILE_LEGACY_UAT_REDIRECT } from '../../src/lib/mobile-oauth';
 import type { Env } from '../../src/env';
 
 const PROD = 'https://api.prod.test';
@@ -213,5 +213,45 @@ describe('UAT public client 的 PKCE code-to-token 往返', () => {
     expect(res.status).toBe(400);
     expect(await res.json()).toMatchObject({ error: 'invalid_client' });
     expect((await exchange(code, verifier)).status, '被閘門擋下不得消耗 code').toBe(200);
+  });
+});
+
+describe('過渡期：舊 callback（mobile-callback 別名）仍可走完整流程（已發佈的 App）', () => {
+  async function pkce(verifier: string) {
+    const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
+    return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+  const form = (clientId: string, redirectUri: string, code: string, verifier: string) =>
+    ({ grant_type: 'authorization_code', client_id: clientId, redirect_uri: redirectUri, code, code_verifier: verifier });
+
+  it.each([
+    ['production', 'tripline-mobile', MOBILE_LEGACY_PROD_REDIRECT, PROD, prodApi],
+    ['UAT', 'tripline-mobile-uat', MOBILE_LEGACY_UAT_REDIRECT, STG, stgApi],
+  ] as const)('%s：舊 redirect 的 authorize→approve→token 往返成功，code 導回舊 callback', async (_n, clientId, redirect, origin, mk) => {
+    const api = mk();
+    const verifier = `legacy-${clientId}-verifier-`.repeat(3);
+    const start = await api.get(authUrl(origin, clientId, redirect, { scope: 'profile', code_challenge: await pkce(verifier) }));
+    expect(start.status).toBe(302);
+    const requestId = new URL(start.headers.get('Location')!).searchParams.get('request_id')!;
+    const approved = await api.request('POST', `${origin}/api/oauth/authorize/requests/${requestId}/approve`, { as: USER, json: {} });
+    expect(approved.status).toBe(200);
+    const callback = new URL(((await approved.json()) as { redirect_to: string }).redirect_to);
+    expect(callback.origin + callback.pathname).toBe(redirect);
+    const token = await api.request('POST', `${origin}/api/oauth/token`, { form: form(clientId, redirect, callback.searchParams.get('code')!, verifier) });
+    expect(token.status).toBe(200);
+  });
+
+  it('跨環境：production 不收 UAT 的舊 redirect，UAT 不收 production 的舊 redirect（authorize 與 token）', async () => {
+    expect((await prodApi().get(authUrl(PROD, 'tripline-mobile', MOBILE_LEGACY_UAT_REDIRECT))).status).toBe(400);
+    expect((await stgApi().get(authUrl(STG, 'tripline-mobile-uat', MOBILE_LEGACY_PROD_REDIRECT))).status).toBe(400);
+    const res = await prodApi().request('POST', `${PROD}/api/oauth/token`, { form: form('tripline-mobile', MOBILE_LEGACY_UAT_REDIRECT, 'x', 'v'.repeat(43)) });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: 'invalid_client' });
+  });
+
+  it('相似網址被拒：舊 callback 加尾斜線、換主機，authorize 回 400', async () => {
+    for (const bad of [`${MOBILE_LEGACY_PROD_REDIRECT}/`, 'https://evil.mobile-callback.trip-planner-dby.pages.dev/oauth/callback']) {
+      expect((await prodApi().get(authUrl(PROD, 'tripline-mobile', bad))).status, bad).toBe(400);
+    }
   });
 });

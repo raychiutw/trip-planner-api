@@ -41,7 +41,9 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     throw new AppError('DATA_VALIDATION', '缺少 tripId 參數');
   }
 
-  if (tripId && !await hasPermission(env.DB, auth, tripId)) {
+  // 帶 tripId 時 ops:trips:read 的 service token 同樣放行（與不帶 tripId 查全部等價；agent 收屍查詢用）。
+  // 不改 hasPermission：它對 service token 回 false 是刻意的。
+  if (tripId && !hasOpsScope(auth, 'ops:trips:read') && !await hasPermission(env.DB, auth, tripId)) {
     throw new AppError('PERM_DENIED');
   }
 

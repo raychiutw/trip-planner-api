@@ -130,8 +130,8 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
     throw new AppError('PERM_DENIED', 'owner 未授權 tp-request（無 Consent）');
   }
 
-  // 5.5 AI 資料同意（ADR-0012；旗標開且文案填妥才生效）：owner 與送出者都要是 valid，缺任一方就不簽發、終結請求。
-  const consentGap = await consentGapAtMint(context.env, ownerUserId, (reqRow as { submitted_by?: string | null }).submitted_by ?? null);
+  // 5.5 AI 資料同意（ADR-0012）：只看 owner（旅伴送出不需自己同意），owner 缺同意就不簽發、終結請求。
+  const consentGap = await consentGapAtMint(context.env, ownerUserId);
   if (consentGap) {
     await recordAuthEvent(
       db,

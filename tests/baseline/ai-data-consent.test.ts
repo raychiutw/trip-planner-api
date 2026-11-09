@@ -259,11 +259,28 @@ describe.each(ENTRIES)('受管制入口：$name', (entry) => {
     await seedEvent(OWNER, 'ai-data-v0', 'accepted');
     await blockedWithoutRows(OWNER, 'AI_CONSENT_REQUIRED', 'stale');
   });
-  it('旅伴（共編者）直接放行：自己沒同意、owner 也沒同意都能送', async () => {
+  it('旅伴自己沒同意（none／withdrawn／stale）但 owner 有效 → 放行（旅伴免同意）', async () => {
     await clearEvents();
-    await allowed(COLLAB);
+    await accept(OWNER);
+    await allowed(COLLAB); // none
+    await accept(COLLAB); await withdraw(COLLAB);
+    await allowed(COLLAB); // withdrawn
+    await clearEvents();
+    await accept(OWNER); await seedEvent(COLLAB, 'ai-data-v0', 'accepted');
+    await allowed(COLLAB); // stale
+  });
+  it('旅伴送出、owner 沒有有效同意（none／stale／withdrawn）→ 403 AI_CONSENT_OWNER_REQUIRED（不帶 status），不建立 request；旅伴自己有同意也一樣', async () => {
+    await clearEvents();
+    await accept(COLLAB);
+    await blockedWithoutRows(COLLAB, 'AI_CONSENT_OWNER_REQUIRED', 'none');
+    await seedEvent(OWNER, 'ai-data-v0', 'accepted');
+    await blockedWithoutRows(COLLAB, 'AI_CONSENT_OWNER_REQUIRED', 'stale');
     await accept(OWNER); await withdraw(OWNER);
-    await allowed(COLLAB);
+    await blockedWithoutRows(COLLAB, 'AI_CONSENT_OWNER_REQUIRED', 'withdrawn');
+  });
+  it('雙方都沒同意 → 旅伴回 AI_CONSENT_OWNER_REQUIRED（缺的是 owner）', async () => {
+    await clearEvents();
+    await blockedWithoutRows(COLLAB, 'AI_CONSENT_OWNER_REQUIRED', 'none');
   });
   it('owner 同意後可送出', async () => {
     await clearEvents();
@@ -285,13 +302,6 @@ describe.each(ENTRIES)('受管制入口：$name', (entry) => {
     const res = await entry.call(STRANGER);
     expect(res.status).toBe(403);
     expect(((await res.json()) as any).error.code).toBe('PERM_DENIED');
-  });
-  it('不需任何旗標：沒有同意的 owner 被攔 403；旅伴放行', async () => {
-    await clearEvents();
-    const res = await entry.call(OWNER);
-    expect(res.status).toBe(403);
-    expect(((await res.json()) as any).error.code).toBe('AI_CONSENT_REQUIRED');
-    expect(entry.ok).toContain((await entry.call(COLLAB)).status);
   });
   it('服務 token（無 userId）不套用閘門', async () => {
     await clearEvents();

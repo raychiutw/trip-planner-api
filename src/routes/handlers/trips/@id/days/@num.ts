@@ -5,7 +5,7 @@ import { AppError } from '../../../../../errors';
 import { batchFindOrCreatePois, type FindOrCreatePoiData } from '../../../../../lib/poi';
 import { resolveEntryTimes } from '../../../../../lib/time';
 import { validateDayBody, detectGarbledText } from '../../../../../lib/validate';
-import { json, parseJsonBody, getAuth } from '../../../../../lib/utils';
+import { json, parseJsonBody, getAuth, publicIfAnonymous } from '../../../../../lib/utils';
 import { normalizeReservation } from '../../../../../lib/reservation';
 import type { Env } from '../../../../../env';
 import {
@@ -24,7 +24,8 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
   const db = context.env.DB;
 
   // v2.33.41 security: gate anonymous read.
-  await requireTripReadAccess(db, getAuth(context), id);
+  const auth = getAuth(context);
+  const access = await requireTripReadAccess(db, auth, id);
 
   const day = await db
     .prepare('SELECT * FROM trip_days WHERE trip_id = ? AND day_num = ?')
@@ -58,7 +59,7 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     segmentsMap,
   });
 
-  return json(assembled);
+  return publicIfAnonymous(json(assembled), auth, access.published);
 };
 
 // ---------------------------------------------------------------------------

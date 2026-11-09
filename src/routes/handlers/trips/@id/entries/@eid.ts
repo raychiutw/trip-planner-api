@@ -1,10 +1,9 @@
 import { logAudit, computeDiff } from '../../../../../lib/audit';
 import { hasWritePermission, verifyEntryBelongsToTrip, requireAuth, requireTripReadAccess } from '../../../../../lib/permissions';
 import { AppError } from '../../../../../errors';
-import { getAuth } from '../../../../../lib/utils';
 import { TIME_RE, parseTime } from '../../../../../lib/time';
 import { detectGarbledText } from '../../../../../lib/validate';
-import { json, parseJsonBody, parseIntParam, buildUpdateClause } from '../../../../../lib/utils';
+import { json, parseJsonBody, parseIntParam, buildUpdateClause, getAuth, publicIfAnonymous } from '../../../../../lib/utils';
 import type { Env } from '../../../../../env';
 import { fetchEntryPoisByEntries } from '../../../../../lib/day-merge';
 import { resortDayByArrival } from '../../../../../lib/entry-sort';
@@ -50,11 +49,11 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
   // [id].ts) 走 requireTripReadAccess — published trip 允許 anonymous read，
   // 否則 owner / member only。之前 requireAuth 讓 anon 對 published trip
   // 401 with sibling endpoint contract drift。
-  const [_access, belongsToTrip] = await Promise.all([
-    requireTripReadAccess(db, getAuth(context), id),
+  const auth = getAuth(context);
+  const [access, belongsToTrip] = await Promise.all([
+    requireTripReadAccess(db, auth, id),
     verifyEntryBelongsToTrip(db, eid, id),
   ]);
-  void _access;
   if (!belongsToTrip) throw new AppError('DATA_NOT_FOUND');
 
   const row = await db
@@ -69,13 +68,13 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
   const { poi_id: _legacyPoiId, ...entryFields } = row;
   void _legacyPoiId;
 
-  return json({
+  return publicIfAnonymous(json({
     ...entryFields,
     master,
     alternates: bucket.alternates,
     stop_pois: bucket.stopPois,
     entry_pois_version: bucket.version,
-  });
+  }), auth, access.published);
 };
 
 export const onRequestPatch: PagesFunction<Env> = async (context) => {

@@ -12,7 +12,7 @@
 
 import { requireAuth, requireTripReadAccess, requireTripWrite } from '../../../../../lib/permissions';
 import { AppError } from '../../../../../errors';
-import { json, getAuth, parseJsonBody } from '../../../../../lib/utils';
+import { json, getAuth, parseJsonBody, publicIfAnonymous } from '../../../../../lib/utils';
 import type { Env } from '../../../../../env';
 import { isSegmentMode, isValidMin, resolveSegmentTravel, sanitizeSubmode, SEGMENT_RETURNING_COLS } from './_shared';
 
@@ -41,7 +41,8 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
   // v2.33.41 security: gate anonymous read — published trips allow,
   // otherwise owner/member only (取代之前 requireAuth + hasPermission，
   // 對齊其他 trips/[id]/* GET handler 的 published-aware 模型)。
-  await requireTripReadAccess(db, getAuth(context), tripId);
+  const auth = getAuth(context);
+  const access = await requireTripReadAccess(db, auth, tripId);
 
   const res = await db
     .prepare(
@@ -57,7 +58,7 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     .bind(tripId)
     .all<SegmentRow>();
 
-  return json(res.results ?? []);
+  return publicIfAnonymous(json(res.results ?? []), auth, access.published);
 };
 
 interface CreateSegmentBody {

@@ -84,7 +84,7 @@ export async function recordWithdrawn(db: D1Database, userId: string): Promise<b
 }
 
 /**
- * 受管制入口的閘門（雙方同意）：送出者與行程 owner 都必須是 valid。
+ * 受管制入口的閘門：只有行程 owner 自己送出時才要求有效的資料同意；旅伴（共編者）直接放行。
  * 必須在「已確認有該行程寫權限」之後、任何寫入之前呼叫。
  * 不是 user-bound 的 token（服務 token、無 userId）不套用——那是系統排程，不是某位使用者的資料交付。
  */
@@ -92,36 +92,29 @@ export async function assertAiConsent(env: Pick<Env, 'DB'>, auth: AuthData, trip
   if (!isConsentEnforced()) return;
   if (auth.isServiceToken || !auth.userId) return;
 
-  const sender = await getConsentState(env.DB, auth.userId);
-  if (sender.status !== 'valid') throw consentError('AI_CONSENT_REQUIRED', sender);
-
   const trip = await env.DB.prepare('SELECT owner_user_id FROM trips WHERE id = ?').bind(tripId).first<{ owner_user_id: string | null }>();
-  const ownerId = trip?.owner_user_id;
-  if (!ownerId || ownerId === auth.userId) return; // owner 自己送：同一人，只檢查一次
-  const owner = await getConsentState(env.DB, ownerId);
-  if (owner.status !== 'valid') throw consentError('AI_CONSENT_OWNER_REQUIRED', owner);
+  if (trip?.owner_user_id && trip.owner_user_id !== auth.userId) return; // 旅伴：不需同意
+  const sender = await getConsentState(env.DB, auth.userId);
+  if (sender.status !== 'valid') throw consentError(sender);
 }
 
-function consentError(code: 'AI_CONSENT_REQUIRED' | 'AI_CONSENT_OWNER_REQUIRED', state: ConsentState): AppError {
-  const who = code === 'AI_CONSENT_REQUIRED' ? '你尚未同意' : '行程擁有者尚未同意';
-  // owner 的狀態不揭露給旅伴（只需知道缺的是 owner）；送出者自己的狀態才帶 status
-  return new AppError(code, `${who} AI 資料處理（需要版本 ${CURRENT_CONSENT_VERSION}）`, {
+function consentError(state: ConsentState): AppError {
+  return new AppError('AI_CONSENT_REQUIRED', `你尚未同意 AI 資料處理（需要版本 ${CURRENT_CONSENT_VERSION}）`, {
     requiredVersion: CURRENT_CONSENT_VERSION,
-    ...(code === 'AI_CONSENT_REQUIRED' ? { status: state.status } : {}),
+    status: state.status,
   });
 }
 
 /**
  * mint 時的檢查（ADR-0012 補強）：agent 取得 owner 權限 token 才是資料真正交付 AI 的時間點。
- * 入口閘門之外再檢查一次，涵蓋「旗標啟用前已排隊」與「撤回和建立請求同時發生」的請求。
- * 回傳缺同意的一方（'owner' 或 'submitter'），都有效或不強制時回 null。
- * 送出者不是一般使用者（submitted_by 不是任何使用者的 email，例如服務／系統送出）→ 只檢查 owner，同入口閘門的服務 token 豁免。
+ * 旅伴（submitted_by 對得上 owner 以外的使用者）送出的請求不需要任何同意 → null；
+ * owner 自己、或服務／系統送出（submitted_by 不是任何使用者的 email）→ 只檢查 owner。
  */
-export async function consentGapAtMint(env: Pick<Env, 'DB'>, ownerUserId: string, submittedBy: string | null): Promise<'owner' | 'submitter' | null> {
+export async function consentGapAtMint(env: Pick<Env, 'DB'>, ownerUserId: string, submittedBy: string | null): Promise<'owner' | null> {
   if (!isConsentEnforced()) return null;
-  if ((await getConsentState(env.DB, ownerUserId)).status !== 'valid') return 'owner';
-  if (!submittedBy) return null;
-  const submitter = await env.DB.prepare('SELECT id FROM users WHERE email = ? COLLATE NOCASE').bind(submittedBy).first<{ id: string }>();
-  if (!submitter || submitter.id === ownerUserId) return null;
-  return (await getConsentState(env.DB, submitter.id)).status === 'valid' ? null : 'submitter';
+  if (submittedBy) {
+    const submitter = await env.DB.prepare('SELECT id FROM users WHERE email = ? COLLATE NOCASE').bind(submittedBy).first<{ id: string }>();
+    if (submitter && submitter.id !== ownerUserId) return null;
+  }
+  return (await getConsentState(env.DB, ownerUserId)).status === 'valid' ? null : 'owner';
 }

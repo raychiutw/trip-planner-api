@@ -367,6 +367,6 @@ export const Account_InvitationsGetResponse = z.union([Account_PendingInvitation
 /** 三個受管制入口（建立請求、行程健檢、AI 筆記生成）的 403：沒有寫權限，或 AI 資料同意未滿足。 */
 export const AiConsentGated403 = {
   description:
-    '沒有此行程的寫入權限（PERM_DENIED）；或 AI 資料同意未滿足（旗標開且文案填妥才會發生）：送出者未同意 AI_CONSENT_REQUIRED（error 帶 requiredVersion 與送出者的 status）、行程擁有者未同意 AI_CONSENT_OWNER_REQUIRED（只帶 requiredVersion，不帶 status），且不建立請求',
+    '沒有此行程的寫入權限（PERM_DENIED）；或 AI 資料同意未滿足（旗標開且文案填妥才會發生）：行程擁有者自己送出但未同意 AI_CONSENT_REQUIRED（error 帶 requiredVersion 與送出者的 status），且不建立請求；旅伴（共編者）送出不需同意（AI_CONSENT_OWNER_REQUIRED 不再回傳）',
   schema: z.union([ApiError, AiConsentGateError]),
 };

@@ -1,6 +1,6 @@
 /**
- * 真實文案（尚有待填占位符）：旗標開了也不強制，三個入口行為與現在完全相同。
- * 不 mock 文案——這份檔案守的就是「文案沒填妥就不能強制」。
+ * 「文案沒填妥就不能強制」：第一組測試守真實文案已無占位符且內容就是 owner 提供的；
+ * 後兩組在 beforeAll 把占位符放回真實文案物件，守未完成時旗標開了也不強制、POST 不得記錄同意。
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createTestDb, disposeMiniflare } from './setup';
@@ -14,6 +14,15 @@ const OWNER = 'aici-owner@test.com';
 const TRIP = 'aici-trip';
 let db: D1Database;
 let api: Api;
+
+const PLACEHOLDER_TEXT = '責任人：{{RESPONSIBLE_PARTY}}；聯絡信箱：{{CONTACT_EMAIL}}；條款：{{TERMS_URL}}';
+const realSections = CONSENT_TEXTS[CURRENT_CONSENT_VERSION]!.sections;
+const withPlaceholders = () => {
+  CONSENT_TEXTS[CURRENT_CONSENT_VERSION]!.sections = [...realSections, { heading: '待填', items: [PLACEHOLDER_TEXT] }];
+};
+const restoreReal = () => {
+  CONSENT_TEXTS[CURRENT_CONSENT_VERSION]!.sections = realSections;
+};
 
 beforeAll(async () => {
   db = await createTestDb();
@@ -32,10 +41,12 @@ afterAll(async () => {
 const textOf = () => JSON.stringify(CONSENT_TEXTS[CURRENT_CONSENT_VERSION]);
 
 describe('文案', () => {
-  it('目前版本是 ai-data-v1；還有恰好三個待填占位符，所以 isConsentTextComplete() 為 false', () => {
+  it('目前版本是 ai-data-v1；占位符已填妥（責任人、信箱、條款連結），isConsentTextComplete() 為 true', () => {
     expect(CURRENT_CONSENT_VERSION).toBe('ai-data-v1');
-    expect([...new Set(textOf().match(/\{\{[A-Z_]+\}\}/g))].sort()).toEqual(['{{CONTACT_EMAIL}}', '{{RESPONSIBLE_PARTY}}', '{{TERMS_URL}}']);
-    expect(isConsentTextComplete()).toBe(false);
+    expect(textOf().match(/\{\{[A-Z_]+\}\}/g)).toBeNull();
+    expect(textOf()).toContain('責任人：邱淞瑋；聯絡信箱：lean.lean@gmail.com');
+    expect(textOf()).toContain('詳見連結：https://www.anthropic.com/legal/commercial-terms');
+    expect(isConsentTextComplete()).toBe(true);
   });
   it('isConsentTextComplete 只要任何一個占位符還在就是 false；全部填妥才 true', () => {
     const full = { version: 'x', title: 't', intro: 'i', sections: [{ heading: 'h', items: ['a'] }], withdrawal: ['w'] };
@@ -59,13 +70,23 @@ describe('文案', () => {
     expect(t).toContain('已經開始的工作');
     expect(t).toContain('無法收回');
   });
-  it('旗標開但文字未完成 → isConsentEnforced 為 false；旗標關 → false', () => {
-    expect(isConsentEnforced({ AI_CONSENT_ENFORCED: 'true' })).toBe(false);
+  it('文字已完成：旗標開 → isConsentEnforced 為 true；旗標關 → false（上線仍由旗標決定）', () => {
+    expect(isConsentEnforced({ AI_CONSENT_ENFORCED: 'true' })).toBe(true);
     expect(isConsentEnforced({})).toBe(false);
+  });
+  it('旗標開但文字未完成 → isConsentEnforced 為 false', () => {
+    withPlaceholders();
+    try {
+      expect(isConsentEnforced({ AI_CONSENT_ENFORCED: 'true' })).toBe(false);
+    } finally {
+      restoreReal();
+    }
   });
 });
 
 describe('文案未填妥：POST 不得記錄同意', () => {
+  beforeAll(withPlaceholders);
+  afterAll(restoreReal);
   it('POST → 409 AI_CONSENT_NOT_READY（帶 currentVersion），不寫入事件；GET 與 DELETE 不受影響', async () => {
     const res = await api.request('POST', '/api/account/ai-data-consent', { as: OWNER, json: { version: 'ai-data-v1' } });
     expect(res.status).toBe(409);
@@ -83,6 +104,8 @@ describe('文案未填妥：POST 不得記錄同意', () => {
 });
 
 describe('旗標開、文案未完成：不擋', () => {
+  beforeAll(withPlaceholders);
+  afterAll(restoreReal);
   it('GET 狀態：enforced=false', async () => {
     const res = await api.get('/api/account/ai-data-consent', { as: OWNER });
     expect(res.status).toBe(200);

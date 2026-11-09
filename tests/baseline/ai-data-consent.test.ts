@@ -397,7 +397,8 @@ describe('GET /api/requests：對服務 token 省略 submittedBy（email）', ()
     reqId = (await db.prepare("INSERT INTO trip_requests (trip_id, message, submitted_by) VALUES (?, 'min-1', ?) RETURNING id").bind(TRIP, OWNER).first<{ id: number }>())!.id;
   });
   it('服務 token：列表（陣列與分頁兩種形狀）沒有 submittedBy，仍有 submittedByDisplayName', async () => {
-    // 服務 token 不能帶 tripId 讀（hasPermission 對服務 token 恆 false）；走 ops:trips:read 的全域列表
+    // 這裡測的是不帶 tripId 的全域列表（ops:trips:read）。帶 tripId 時 hasPermission 對服務 token 仍恆 false，
+    // 但列表 handler 對持有 ops:trips:read 的服務 token 另行放行（#1662），見 tests/contract/requests-ops.contract.test.ts。
     const arr = await (await apiOn.request('GET', '/api/requests', { bearer: svc })).json() as Array<Record<string, unknown>>;
     expect(arr.length).toBeGreaterThan(0);
     for (const r of arr) { expect(r).not.toHaveProperty('submittedBy'); expect(r).toHaveProperty('submittedByDisplayName'); }

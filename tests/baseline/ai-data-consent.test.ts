@@ -33,8 +33,7 @@ const V = 'ai-data-v1';
 const ORIGIN = 'https://trip-planner-dby.pages.dev';
 
 let db: D1Database;
-let apiOn: Api; // AI_CONSENT_ENFORCED=true（文案已填妥）
-let apiOff: Api; // 旗標未設
+let apiOn: Api; // 文案已填妥，閘門永遠強制
 let companion: string;
 
 const uid = userIdFor;
@@ -50,8 +49,7 @@ const body = async (r: Response) => (await r.json()) as Record<string, any>;
 
 beforeAll(async () => {
   db = await createTestDb();
-  apiOn = createApi({ env: mockEnv(db, { AI_CONSENT_ENFORCED: 'true', ALLOWED_ORIGINS: ORIGIN }) });
-  apiOff = createApi({ env: mockEnv(db, { ALLOWED_ORIGINS: ORIGIN }) });
+  apiOn = createApi({ env: mockEnv(db, { ALLOWED_ORIGINS: ORIGIN }) });
   for (const e of [COLLAB, STRANGER, OTHER]) await seedUser(db, e);
   await seedTrip(db, { id: TRIP, owner: OWNER });
   await db.prepare("INSERT OR IGNORE INTO trip_permissions (user_id, trip_id, role) VALUES (?, ?, 'member')").bind(uid(COLLAB), TRIP).run();
@@ -72,7 +70,7 @@ describe('GET /api/account/ai-data-consent', () => {
   it('未登入 → 401', async () => {
     expect((await apiOn.request('GET', '/api/account/ai-data-consent')).status).toBe(401);
   });
-  it('從未同意 → none；帶目前版本、說明文字、enforced（旗標開）', async () => {
+  it('從未同意 → none；帶目前版本、說明文字、enforced（不需旗標）', async () => {
     await clearEvents();
     const res = await get(OTHER);
     expect(res.status).toBe(200);
@@ -80,7 +78,6 @@ describe('GET /api/account/ai-data-consent', () => {
     expect(b).toMatchObject({ status: 'none', currentVersion: V, acceptedVersion: null, acceptedAt: null, enforced: true });
     expect(b.text.version).toBe(V);
     expect(typeof b.text.title).toBe('string');
-    expect((await body(await get(OTHER, apiOff))).enforced).toBe(false);
   });
 });
 
@@ -304,43 +301,40 @@ describe.each(ENTRIES)('受管制入口：$name', (entry) => {
     expect(res.status).toBe(403);
     expect(((await res.json()) as any).error.code).toBe('PERM_DENIED');
   });
-  it('旗標關閉：沒有任何同意也照常運作（行為與現況相同）', async () => {
+  it('不需任何旗標：沒有任何同意的 owner／旅伴一律被攔 403', async () => {
     await clearEvents();
-    await allowed(COLLAB, apiOff);
-    await allowed(OWNER, apiOff);
+    for (const who of [OWNER, COLLAB]) {
+      const res = await entry.call(who);
+      expect(res.status).toBe(403);
+      expect(((await res.json()) as any).error.code).toMatch(/^AI_CONSENT_(OWNER_)?REQUIRED$/);
+    }
   });
-  it('旗標寫成非 true 的值（false／空字串）等同關閉', async () => {
-    await clearEvents();
-    for (const v of ['false', '', '0']) await allowed(OWNER, createApi({ env: mockEnv(db, { AI_CONSENT_ENFORCED: v }) }));
-  });
-  it('服務 token（無 userId）不套用閘門：行為與旗標關閉時相同', async () => {
+  it('服務 token（無 userId）不套用閘門', async () => {
     await clearEvents();
     const as = async (api: Api) => {
       const r = await api.request('POST', entry.name.includes('/api/requests') ? '/api/requests' : entry.name.includes('health') ? `/api/trips/${TRIP}/health-check` : `/api/trips/${TRIP}/notes/tips/generate`, { bearer: companion, json: { tripId: TRIP, message: 'x' } });
       return { status: r.status, code: ((await r.json()) as any)?.error?.code };
     };
-    const on = await as(apiOn);
-    expect(on.code).not.toMatch(/^AI_CONSENT/);
-    expect(on).toEqual(await as(apiOff));
+    expect((await as(apiOn)).code).not.toMatch(/^AI_CONSENT/);
   });
 });
 
 describe('assertAiConsent（共用模組）', () => {
-  const env = (flag?: string) => mockEnv(db, { AI_CONSENT_ENFORCED: flag });
+  const env = () => mockEnv(db);
   it('服務 token／無 userId 的 auth 直接放行，連 DB 都不查', async () => {
     const boom = { prepare: () => { throw new Error('不應查 DB'); } } as unknown as D1Database;
     for (const auth of [
       { email: 'service:x', userId: null, isServiceToken: true },
       { email: 'x@y.z', userId: null, isServiceToken: false },
-    ]) await expect(assertAiConsent({ ...env('true'), DB: boom }, auth, TRIP)).resolves.toBeUndefined();
+    ]) await expect(assertAiConsent({ ...env(), DB: boom }, auth, TRIP)).resolves.toBeUndefined();
   });
   it('isServiceToken 為 true 就豁免，即使帶了 userId（防禦性：以旗標判斷，不只靠 userId 為空）', async () => {
     const boom = { prepare: () => { throw new Error('不應查 DB'); } } as unknown as D1Database;
-    await expect(assertAiConsent({ ...env('true'), DB: boom }, { email: 'service:x', userId: 'u', isServiceToken: true }, TRIP)).resolves.toBeUndefined();
+    await expect(assertAiConsent({ ...env(), DB: boom }, { email: 'service:x', userId: 'u', isServiceToken: true }, TRIP)).resolves.toBeUndefined();
   });
-  it('旗標關閉時不查 DB', async () => {
-    const boom = { prepare: () => { throw new Error('不應查 DB'); } } as unknown as D1Database;
-    await expect(assertAiConsent({ ...env(), DB: boom }, { email: 'a@b.c', userId: 'u', isServiceToken: false }, TRIP)).resolves.toBeUndefined();
+  it('一般使用者一定查 DB（閘門不再有旗標短路）', async () => {
+    const boom = { prepare: () => { throw new Error('查了 DB'); } } as unknown as D1Database;
+    await expect(assertAiConsent({ ...env(), DB: boom }, { email: 'a@b.c', userId: 'u', isServiceToken: false }, TRIP)).rejects.toThrow('查了 DB');
   });
 });
 

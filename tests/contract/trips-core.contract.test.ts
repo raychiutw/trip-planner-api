@@ -15,7 +15,7 @@ vi.mock('../../src/lib/maps/google-client', () => ({
 vi.mock('../../src/lib/maps-lock', () => ({ assertGoogleAvailable: vi.fn(async () => undefined) }));
 
 import { createTestDb } from '../baseline/setup';
-import { mockEnv, seedTrip, seedEntry, seedPoi, getDayId, userIdFor } from '../baseline/helpers';
+import { mockEnv, seedTrip, seedEntry, seedPoi, getDayId, userIdFor, seedAiConsent } from '../baseline/helpers';
 import { createApi, type Api } from '../baseline/http';
 import { serviceToken } from '../baseline/service-token';
 import { assertGoogleAvailable } from '../../src/lib/maps-lock';
@@ -69,6 +69,7 @@ beforeAll(async () => {
   db = await createTestDb();
   api = createApi({ env: mockEnv(db, { GOOGLE_MAPS_API_KEY: 'test-key' } as never) });
   apiNoKey = createApi({ env: mockEnv(db) });
+  await seedAiConsent(db, OWNER); await seedAiConsent(db, STRANGER);
 
   await seedTrip(db, { id: PUB, owner: OWNER, days: 2, published: 1 });
   await seedTrip(db, { id: PRIV, owner: OWNER, days: 1, published: 0 });

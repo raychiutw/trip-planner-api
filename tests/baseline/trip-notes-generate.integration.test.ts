@@ -10,7 +10,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import { createTestDb, disposeMiniflare } from './setup';
-import { mockEnv, seedTrip, seedUser } from './helpers';
+import { mockEnv, seedTrip, seedUser, seedAiConsent } from './helpers';
 import { createApi, type Api } from './http';
 import { cleanupTripNotes } from './cleanup-trip-notes';
 import type { Env } from '../../src/env';
@@ -30,6 +30,7 @@ beforeAll(async () => {
   api = createApi({ env });
   await seedUser(db, ownerEmail);
   await seedUser(db, strangerEmail);
+  await seedAiConsent(db, ownerEmail); await seedAiConsent(db, strangerEmail);
   await seedTrip(db, { id: tripA, owner: ownerEmail });
   await seedTrip(db, { id: tripB, owner: ownerEmail });
   await seedTrip(db, { id: tripC, owner: ownerEmail });

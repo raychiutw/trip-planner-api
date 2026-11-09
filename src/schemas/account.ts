@@ -35,7 +35,7 @@ export const Account_AiDataConsentState = z.object({
   acceptedVersion: z.string().nullable().openapi({ description: '已接受的版本（valid／stale）；none／withdrawn 為 null' }),
   acceptedAt: z.string().nullable().openapi({ description: '接受時間（UTC ISO 8601）；none／withdrawn 為 null' }),
   text: Account_AiDataConsentText.openapi({ description: '目前版本的說明文字（web 與 Flutter 只顯示這份）' }),
-  enforced: z.boolean().openapi({ description: '三個受管制入口目前是否真的檢查同意（旗標開且文字已填妥）' }),
+  enforced: z.boolean().openapi({ description: '三個受管制入口目前是否真的檢查同意（文字已填妥即為 true）' }),
 }).openapi('Account_AiDataConsentState');
 
 export const Account_AiDataConsentBody = z.object({

@@ -158,3 +158,10 @@ export async function seedEntryAlternate(db: D1Database, opts: {
   ).bind(opts.entryId, opts.poiId, sortOrder).first<{ id: number }>();
   return result!.id;
 }
+
+/** 種一筆目前版本的「已同意」事件（AI 資料同意閘門永遠強制，打 AI 入口的測試需要先同意；冪等）。 */
+export async function seedAiConsent(db: D1Database, email: string, version = 'ai-data-v1'): Promise<void> {
+  const id = await seedUser(db, email);
+  const has = await db.prepare("SELECT 1 AS x FROM ai_data_consent_events WHERE user_id = ? AND event = 'accepted' AND version = ?").bind(id, version).first();
+  if (!has) await db.prepare("INSERT INTO ai_data_consent_events (user_id, version, event) VALUES (?, ?, 'accepted')").bind(id, version).run();
+}

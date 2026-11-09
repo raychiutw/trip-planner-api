@@ -21,7 +21,7 @@ import type { Env } from '../../../env';
 
 async function stateResponse(env: Env, userId: string): Promise<Response> {
   const state = await getConsentState(env.DB, userId);
-  return rawJson({ ...state, text: currentConsentText(), enforced: isConsentEnforced(env) });
+  return rawJson({ ...state, text: currentConsentText(), enforced: isConsentEnforced() });
 }
 
 export const onRequestGet: PagesFunction<Env> = async (context) => {

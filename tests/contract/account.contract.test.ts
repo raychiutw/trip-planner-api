@@ -193,7 +193,7 @@ describe('/api/account/ai-data-consent', () => {
     expect(g.status).toBe(200);
     const gb = await g.json();
     expectContract(S.Account_AiDataConsentState, gb);
-    expect(gb).toMatchObject({ status: 'none', currentVersion: 'ai-data-v1', enforced: false });
+    expect(gb).toMatchObject({ status: 'none', currentVersion: 'ai-data-v1', enforced: true });
     for (let i = 0; i < 2; i++) {
       const p = await hit(R, 'post', R, { bearer: ownerBearer, json: valid(S.Account_AiDataConsentBody, { version: 'ai-data-v1' }) });
       expect(p.status).toBe(200);

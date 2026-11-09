@@ -13,7 +13,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { createTestDb, disposeMiniflare } from './setup';
-import { mockEnv, seedTrip, seedEntry, seedPoi, getDayId } from './helpers';
+import { mockEnv, seedTrip, seedEntry, seedPoi, getDayId, seedAiConsent } from './helpers';
 import { createApi, type Api } from './http';
 import { serviceToken } from './service-token';
 import { cleanupTrips } from './cleanup-trips';
@@ -77,6 +77,7 @@ async function reportRow(tripId: string) {
 beforeAll(async () => {
   db = await createTestDb();
   api = createApi({ env: mockEnv(db) });
+  await seedAiConsent(db, OWNER); await seedAiConsent(db, VISITOR);
   companion = await serviceToken(db, ['companion']);
   await seed('s16-hc-trip-health');
   await seedOneEntry('s16-hc-trip-health');

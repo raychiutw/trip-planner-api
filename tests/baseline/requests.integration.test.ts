@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createTestDb, disposeMiniflare } from './setup';
-import { mockEnv, seedTrip, userIdFor } from './helpers';
+import { mockEnv, seedTrip, userIdFor, seedAiConsent } from './helpers';
 import { createApi, type Api } from './http';
 import { serviceToken } from './service-token';
 import { cleanupTrips } from './cleanup-trips';
@@ -35,6 +35,7 @@ beforeAll(async () => {
   db = await createTestDb();
   api = createApi({ env: mockEnv(db, { ALLOWED_ORIGINS: 'https://trip-planner-dby.pages.dev' }) });
   await seedTrip(db, { id: TRIP, owner: OWNER });
+  await seedAiConsent(db, OWNER); await seedAiConsent(db, STRANGER);
   companion = await serviceToken(db, ['companion']);
 });
 
@@ -124,6 +125,7 @@ describe('POST /api/requests', () => {
   it('dedupe 只限同一位送出者：共編成員送同樣訊息不會被併成 owner 的那筆', async () => {
     const MEMBER = 's16-req-member@test.com';
     const memberId = await seedUserId(MEMBER);
+    await seedAiConsent(db, MEMBER);
     await db.prepare("INSERT OR IGNORE INTO trip_permissions (user_id, trip_id, role) VALUES (?, ?, 'member')").bind(memberId, TRIP).run();
     const msg = 's16-req 共編同訊息';
     const a = await api.request('POST', '/api/requests', { as: OWNER, json: { tripId: TRIP, message: msg } });

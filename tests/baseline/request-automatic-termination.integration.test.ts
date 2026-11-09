@@ -9,7 +9,7 @@
  */
 import { beforeAll, afterAll, describe, expect, it } from 'vitest';
 import { createTestDb, disposeMiniflare } from './setup';
-import { getDayId, mockEnv, seedEntry, seedTrip, seedUser, userIdFor } from './helpers';
+import { getDayId, mockEnv, seedEntry, seedTrip, seedUser, userIdFor, seedAiConsent } from './helpers';
 import { createApi, type Api } from './http';
 import { cleanupTrips } from './cleanup-trips';
 import { D1Adapter } from '../../src/lib/oauth-d1-adapter';
@@ -27,6 +27,7 @@ let api: Api;
 beforeAll(async () => {
   db = await createTestDb();
   api = createApi({ env: mockEnv(db) });
+  for (const e of [OWNER, OTHER_OWNER, CONSENTED_OWNER]) await seedAiConsent(db, e);
 });
 
 afterAll(async () => {

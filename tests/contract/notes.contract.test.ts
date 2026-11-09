@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { z } from '@hono/zod-openapi';
 import { createTestDb, disposeMiniflare } from '../baseline/setup';
-import { mockEnv, seedTrip, seedUser } from '../baseline/helpers';
+import { mockEnv, seedTrip, seedUser, seedAiConsent } from '../baseline/helpers';
 import { createApi, type Api } from '../baseline/http';
 import { createApp } from '../../src/app';
 import { ApiError } from '../../src/schemas/common';
@@ -43,6 +43,7 @@ beforeAll(async () => {
   api = createApi({ env: mockEnv(db) });
   await seedUser(db, owner);
   await seedUser(db, stranger);
+  await seedAiConsent(db, owner); await seedAiConsent(db, stranger);
   await seedTrip(db, { id: trip, owner });
   await seedTrip(db, { id: otherTrip, owner });
 });

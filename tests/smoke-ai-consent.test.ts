@@ -1,23 +1,17 @@
 /// <reference types="node" />
 /**
  * ai-consent staging smoke 腳本（trip-planner#1615）：安全閘、清理範圍、整套情境對本地 app 乾跑。
- * 乾跑用 createApp + 真 SQLite 當 Io，旗標分別開／關，所以兩組情境的判定邏輯（含強制情境）都被執行過；
- * staging 目前不強制，強制情境對 staging 只能等 owner 啟用旗標。
- * 文案以 vi.mock 填上占位符（只在測試），與 tests/baseline/ai-data-consent.test.ts 同做法。
+ * 乾跑用 createApp + 真 SQLite 當 Io。閘門永遠強制（沒有旗標），唯一的不強制路徑是文案仍含占位符，
+ * 所以「不強制組」靠臨時塞入占位符模擬，兩組情境的判定邏輯都被執行過。
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { createApp } from '../src/app';
 import type { Env } from '../src/env';
 import { createD1 } from './support/d1';
+import { CONSENT_TEXTS, CURRENT_CONSENT_VERSION } from '../src/lib/ai-data-consent-text';
 import {
   assertStaging, cleanupSql, runScenarios, STAGING_D1, STAGING_ORIGIN, PREFIX, type Io,
 } from '../scripts/smoke-ai-consent';
-
-vi.mock('../src/lib/ai-data-consent-text', async (importOriginal) => {
-  const m = await importOriginal<typeof import('../src/lib/ai-data-consent-text')>();
-  const fill = (s: string) => s.replaceAll('{{RESPONSIBLE_PARTY}}', '測試責任人').replaceAll('{{CONTACT_EMAIL}}', 'privacy@example.test').replaceAll('{{TERMS_URL}}', 'https://example.test/terms');
-  return { ...m, CONSENT_TEXTS: Object.fromEntries(Object.entries(m.CONSENT_TEXTS).map(([k, v]) => [k, JSON.parse(fill(JSON.stringify(v)))])) };
-});
 
 describe('安全閘 assertStaging', () => {
   it('預設值與明確的 staging 值通過', () => {
@@ -67,9 +61,9 @@ describe('cleanupSql 只動自己的前綴', () => {
   });
 });
 
-function localIo(flag: string | undefined) {
+function localIo() {
   const d1 = createD1();
-  const env = { DB: d1.db, ENVIRONMENT: 'preview', PUBLIC_ORIGIN: STAGING_ORIGIN, ALLOWED_ORIGINS: '', ...(flag ? { AI_CONSENT_ENFORCED: flag } : {}) } as unknown as Env;
+  const env = { DB: d1.db, ENVIRONMENT: 'preview', PUBLIC_ORIGIN: STAGING_ORIGIN, ALLOWED_ORIGINS: '' } as unknown as Env;
   const io: Io = {
     async sql(s) {
       if (/^\s*SELECT/i.test(s)) return d1.raw.prepare(s).all() as Record<string, unknown>[];
@@ -94,8 +88,11 @@ const snapshot = (d1: ReturnType<typeof createD1>) =>
     .map(({ name }) => [name, (d1.raw.prepare(`SELECT count(*) AS n FROM "${name}"`).get() as { n: number }).n]));
 
 describe('整套情境對本地 app 乾跑', () => {
-  it('旗標關（等同 staging 現況）：不強制組全過、強制組為 SKIP、殘留為 0', async () => {
-    const { d1, io } = localIo(undefined);
+  it('文案仍含占位符（保險，不強制）：不強制組全過、強制組為 SKIP、殘留為 0', async () => {
+    const realSections = CONSENT_TEXTS[CURRENT_CONSENT_VERSION]!.sections;
+    CONSENT_TEXTS[CURRENT_CONSENT_VERSION]!.sections = [...realSections, { heading: '待填', items: ['責任人：{{RESPONSIBLE_PARTY}}'] }];
+    try {
+    const { d1, io } = localIo();
     const before = snapshot(d1);
     const results = await runScenarios(io, { withRequests: true });
     expect(results.filter((r) => r.status === 'FAIL')).toEqual([]);
@@ -105,10 +102,13 @@ describe('整套情境對本地 app 乾跑', () => {
     expect(results.filter((r) => r.status === 'SKIP').map((r) => r.name)).toEqual(expect.arrayContaining(['強制：未同意被攔 403 AI_CONSENT_REQUIRED', 'erasure 清除同意紀錄']));
     expect(snapshot(d1)).toEqual(before);
     d1.close();
+    } finally {
+      CONSENT_TEXTS[CURRENT_CONSENT_VERSION]!.sections = realSections;
+    }
   });
 
   it('預設（不帶 --with-requests）：不建立任何 trip_request，request 步驟為 SKIP', async () => {
-    const { d1, io } = localIo(undefined);
+    const { d1, io } = localIo();
     const results = await runScenarios(io);
     expect(results.filter((r) => r.status === 'FAIL')).toEqual([]);
     expect(results.filter((r) => r.status === 'SKIP' && r.detail.includes('--with-requests')).length).toBeGreaterThanOrEqual(2);
@@ -116,8 +116,8 @@ describe('整套情境對本地 app 乾跑', () => {
     d1.close();
   });
 
-  it('旗標開：強制組全過（403／旅伴 OWNER_REQUIRED／同意後放行／撤回再被攔）、殘留為 0', async () => {
-    const { d1, io } = localIo('true');
+  it('強制（不需旗標）：強制組全過（403／旅伴 OWNER_REQUIRED／同意後放行／撤回再被攔）、殘留為 0', async () => {
+    const { d1, io } = localIo();
     const before = snapshot(d1);
     const results = await runScenarios(io, { withRequests: true });
     expect(results.filter((r) => r.status === 'FAIL')).toEqual([]);

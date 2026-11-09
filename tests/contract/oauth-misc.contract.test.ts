@@ -184,7 +184,7 @@ describe('mobile client 環境閘門的錯誤形狀', () => {
     for (const verb of ['approve', 'deny']) {
       const id = `${P}mobile-${verb}`;
       await new D1Adapter(db, 'AuthRequest').upsert(id, {
-        client_id: 'tripline-mobile', redirect_uri: 'https://mobile-callback.trip-planner-dby.pages.dev/oauth/callback', scopes: ['openid'],
+        client_id: 'tripline-mobile', redirect_uri: 'https://trip-planner-dby.pages.dev/mobile/oauth/callback', scopes: ['openid'],
         state: null, code_challenge: PKCE.code_challenge, code_challenge_method: 'S256', prompt: null,
       }, 600);
       const res = track(`POST ${verb}`, await api.request('POST', `/api/oauth/authorize/requests/${id}/${verb}`, { as: `${P}user@test.com` })); // api 沒有 ENVIRONMENT → 沒有 mobile 契約
@@ -193,7 +193,7 @@ describe('mobile client 環境閘門的錯誤形狀', () => {
       expectContract(OauthMisc_OAuthError, body);
       expect(body).toMatchObject({ error: 'unauthorized_client' });
     }
-    const authz = track('GET authorize', await api.get(`/api/oauth/authorize?${new URLSearchParams({ response_type: 'code', client_id: 'tripline-mobile', redirect_uri: 'https://mobile-callback.trip-planner-dby.pages.dev/oauth/callback', ...PKCE })}`));
+    const authz = track('GET authorize', await api.get(`/api/oauth/authorize?${new URLSearchParams({ response_type: 'code', client_id: 'tripline-mobile', redirect_uri: 'https://trip-planner-dby.pages.dev/mobile/oauth/callback', ...PKCE })}`));
     expect(authz.status).toBe(400);
     const authzBody = await authz.json();
     expectContract(OauthMisc_OAuthError, authzBody);

@@ -60,8 +60,8 @@ describe('0099 client_apps.first_party', () => {
 });
 
 describe('同步自 web 的 0097／0098', () => {
-  it('0097：行動端註冊 app-link callback，且重複套用不會重複加入', () => {
-    d1 = createD1();
+  it('0097：行動端註冊 app-link callback，且重複套用不會重複加入（舊值已由 0105 移除，故只套到 0104 驗）', () => {
+    d1 = createD1({ through: 104 });
     const uris = JSON.parse(clients().find((c) => c.client_id === 'tripline-mobile')!.redirect_uris) as string[];
     expect(uris).toContain('https://mobile-callback.trip-planner-dby.pages.dev/oauth/callback');
     expect(new Set(uris).size).toBe(uris.length);

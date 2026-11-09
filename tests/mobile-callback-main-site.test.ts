@@ -130,12 +130,12 @@ describe('migration 0105：移除舊 callback（只 UPDATE、冪等、只移除�
   const raw = (id: string) => (d1.raw.prepare('SELECT redirect_uris FROM client_apps WHERE client_id = ?').get(id) as { redirect_uris: string } | undefined)?.redirect_uris;
   const uris = (id: string) => JSON.parse(raw(id)!) as string[];
 
-  it('套用後 tripline-mobile／-uat 只剩主站網址；dev client 不動', () => {
+  it('套用後舊網址消失、主站與 loopback 保留；dev client 不動', () => {
     d1 = createD1({ through: 104 });
     const devBefore = raw('tripline-mobile-dev');
     expect(uris('tripline-mobile')).toContain(OLD_PROD); // 前置：舊值確實在
     d1.raw.exec(sql());
-    expect(uris('tripline-mobile')).toEqual([NEW_PROD]);
+    expect(uris('tripline-mobile')).toEqual(['http://127.0.0.1:8765', NEW_PROD]); // loopback 保留
     expect(uris('tripline-mobile-uat')).toEqual([NEW_UAT]);
     expect(raw('tripline-mobile-dev')).toBe(devBefore);
   });

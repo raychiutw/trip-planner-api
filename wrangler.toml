@@ -42,5 +42,10 @@ migrations_dir = "migrations"
 # ⚠ Cron Trigger 只在 production 設定；staging（頂層）刻意不設。deploy.yml 只部署 staging，
 #   所以這段要 production 手動 `wrangler deploy --env production` 才會生效。
 #   另需 `wrangler secret put TELEGRAM_BOT_TOKEN|TELEGRAM_CHAT_ID --env production`；未設定時 scheduled 靜默。
+#
+# 清理排程（trip-planner#1627 階段 1）：web 三支 GitHub Actions 清理的等價實作（src/lib/cleanup-cron.ts），
+# 頻率沿用原 workflow：rate_limit_buckets 每小時、trip_shares＋孤兒 cloned trips 每日 03:17 UTC、
+# trip_invitations 每日 03:00 UTC。cron 字串必須與 cleanup-cron.ts 的常數一致（event.cron 字串比對）。
+# 與 web workflow 並行 1 週（皆 idempotent DELETE），確認無誤後 web 端才刪 workflow。
 [env.production.triggers]
-crons = ["*/10 * * * *"]
+crons = ["*/10 * * * *", "0 * * * *", "17 3 * * *", "0 3 * * *"]

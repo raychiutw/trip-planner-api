@@ -189,6 +189,7 @@ describe('/api/account/ai-authorization', () => {
 describe('/api/account/ai-data-consent', () => {
   const R = '/api/account/ai-data-consent';
   it('GET 200 none → POST 200 valid（重複冪等）→ DELETE 200 withdrawn（重複冪等）；回應符合文件 schema', async () => {
+    await db.prepare('DELETE FROM ai_data_consent_events WHERE user_id = ?').bind(userIdFor(OWNER)).run(); // seedUser 預設已同意，這裡要從 none 開始
     const g = await hit(R, 'get', R, { bearer: ownerBearer });
     expect(g.status).toBe(200);
     const gb = await g.json();

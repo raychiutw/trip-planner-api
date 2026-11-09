@@ -1,14 +1,12 @@
 /// <reference types="node" />
 /**
  * ai-consent staging smoke 腳本（trip-planner#1615）：安全閘、清理範圍、整套情境對本地 app 乾跑。
- * 乾跑用 createApp + 真 SQLite 當 Io。閘門永遠強制（沒有旗標），唯一的不強制路徑是文案仍含占位符，
- * 所以「不強制組」靠臨時塞入占位符模擬，兩組情境的判定邏輯都被執行過。
+ * 乾跑用 createApp + 真 SQLite 當 Io。閘門永遠強制（沒有旗標，也沒有「文案未填妥就不強制」的後門）。
  */
 import { describe, it, expect } from 'vitest';
 import { createApp } from '../src/app';
 import type { Env } from '../src/env';
 import { createD1 } from './support/d1';
-import { CONSENT_TEXTS, CURRENT_CONSENT_VERSION } from '../src/lib/ai-data-consent-text';
 import {
   assertStaging, cleanupSql, runScenarios, STAGING_D1, STAGING_ORIGIN, PREFIX, type Io,
 } from '../scripts/smoke-ai-consent';
@@ -88,25 +86,6 @@ const snapshot = (d1: ReturnType<typeof createD1>) =>
     .map(({ name }) => [name, (d1.raw.prepare(`SELECT count(*) AS n FROM "${name}"`).get() as { n: number }).n]));
 
 describe('整套情境對本地 app 乾跑', () => {
-  it('文案仍含占位符（保險，不強制）：不強制組全過、強制組為 SKIP、殘留為 0', async () => {
-    const realSections = CONSENT_TEXTS[CURRENT_CONSENT_VERSION]!.sections;
-    CONSENT_TEXTS[CURRENT_CONSENT_VERSION]!.sections = [...realSections, { heading: '待填', items: ['責任人：{{RESPONSIBLE_PARTY}}'] }];
-    try {
-    const { d1, io } = localIo();
-    const before = snapshot(d1);
-    const results = await runScenarios(io, { withRequests: true });
-    expect(results.filter((r) => r.status === 'FAIL')).toEqual([]);
-    expect(results.filter((r) => r.status === 'PASS').map((r) => r.name)).toEqual(expect.arrayContaining([
-      '同意狀態端點 GET', '版本不符 POST → 409 且不寫入', '不強制：owner 沒有同意也放行（201）', '不強制：旅伴沒有同意、owner 也沒有 → 放行（201）',
-    ]));
-    expect(results.filter((r) => r.status === 'SKIP').map((r) => r.name)).toEqual(expect.arrayContaining(['強制：未同意被攔 403 AI_CONSENT_REQUIRED', 'erasure 清除同意紀錄']));
-    expect(snapshot(d1)).toEqual(before);
-    d1.close();
-    } finally {
-      CONSENT_TEXTS[CURRENT_CONSENT_VERSION]!.sections = realSections;
-    }
-  });
-
   it('預設（不帶 --with-requests）：不建立任何 trip_request，request 步驟為 SKIP', async () => {
     const { d1, io } = localIo();
     const results = await runScenarios(io);
@@ -116,13 +95,13 @@ describe('整套情境對本地 app 乾跑', () => {
     d1.close();
   });
 
-  it('強制（不需旗標）：強制組全過（403／旅伴放行／同意後放行／撤回再被攔）、殘留為 0', async () => {
+  it('強制組全過（403／旅伴在 owner 未同意時被擋／owner 同意後旅伴免同意放行／撤回再被攔）、殘留為 0', async () => {
     const { d1, io } = localIo();
     const before = snapshot(d1);
     const results = await runScenarios(io, { withRequests: true });
     expect(results.filter((r) => r.status === 'FAIL')).toEqual([]);
     expect(results.filter((r) => r.status === 'PASS').map((r) => r.name)).toEqual(expect.arrayContaining([
-      '強制：未同意被攔 403 AI_CONSENT_REQUIRED', '強制：旅伴送出、owner 未同意 → 放行（201）', '強制：同意後放行', '強制：撤回後再次被攔',
+      '強制：未同意被攔 403 AI_CONSENT_REQUIRED', '強制：旅伴送出、owner 未同意 → 403 AI_CONSENT_OWNER_REQUIRED（旅伴自己同意也不行）', '強制：owner 同意後 owner 與旅伴（旅伴自己沒同意）都放行', '強制：撤回後再次被攔',
     ]));
     expect(results.some((r) => r.name.startsWith('不強制'))).toBe(false);
     expect(snapshot(d1)).toEqual(before);

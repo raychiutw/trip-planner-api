@@ -35,7 +35,7 @@ export const Account_AiDataConsentState = z.object({
   acceptedVersion: z.string().nullable().openapi({ description: '已接受的版本（valid／stale）；none／withdrawn 為 null' }),
   acceptedAt: z.string().nullable().openapi({ description: '接受時間（UTC ISO 8601）；none／withdrawn 為 null' }),
   text: Account_AiDataConsentText.openapi({ description: '目前版本的說明文字（web 與 Flutter 只顯示這份）' }),
-  enforced: z.boolean().openapi({ description: '三個受管制入口目前是否真的檢查同意（文字已填妥即為 true）' }),
+  enforced: z.boolean().openapi({ description: '一律為 true（旗標已移除，保留欄位給舊版 client 相容）' }),
 }).openapi('Account_AiDataConsentState');
 
 export const Account_AiDataConsentBody = z.object({
@@ -367,6 +367,6 @@ export const Account_InvitationsGetResponse = z.union([Account_PendingInvitation
 /** 三個受管制入口（建立請求、行程健檢、AI 筆記生成）的 403：沒有寫權限，或 AI 資料同意未滿足。 */
 export const AiConsentGated403 = {
   description:
-    '沒有此行程的寫入權限（PERM_DENIED）；或 AI 資料同意未滿足（旗標開且文案填妥才會發生）：行程擁有者自己送出但未同意 AI_CONSENT_REQUIRED（error 帶 requiredVersion 與送出者的 status），且不建立請求；旅伴（共編者）送出不需同意（AI_CONSENT_OWNER_REQUIRED 不再回傳）',
+    '沒有此行程的寫入權限（PERM_DENIED）；或 AI 資料同意未滿足：行程擁有者自己送出但未同意 AI_CONSENT_REQUIRED（error 帶 requiredVersion 與送出者的 status）、旅伴送出但行程擁有者未同意 AI_CONSENT_OWNER_REQUIRED（只帶 requiredVersion，不帶 status；旅伴自己不需同意），且不建立請求',
   schema: z.union([ApiError, AiConsentGateError]),
 };

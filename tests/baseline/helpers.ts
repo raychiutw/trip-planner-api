@@ -2,6 +2,7 @@
  * API Test Helpers — 共用 mock 建構工具
  */
 import type { Env, AuthData } from '../../src/env';
+import { CURRENT_CONSENT_VERSION } from '../../src/lib/ai-data-consent-text';
 
 /** 建立 mock Env 物件 */
 export function mockEnv(db: D1Database, overrides: Partial<Env> = {}): Env {
@@ -21,12 +22,21 @@ export function userIdFor(email: string): string {
   return `test-user-${email.replace(/[^a-z0-9]/gi, '-')}`;
 }
 
+/** AI 資料同意已一律強制：預設讓測試使用者已同意目前版本（沒有任何事件才寫，不蓋掉測試自己造的狀態）。 */
+export async function seedConsent(db: D1Database, userId: string): Promise<void> {
+  await db.prepare(
+    `INSERT INTO ai_data_consent_events (user_id, version, event)
+     SELECT ?, ?, 'accepted' WHERE NOT EXISTS (SELECT 1 FROM ai_data_consent_events WHERE user_id = ?)`
+  ).bind(userId, CURRENT_CONSENT_VERSION, userId).run();
+}
+
 /** Insert users row (idempotent). Tests that create trips/permissions/saved-pois need user FK satisfied. */
 export async function seedUser(db: D1Database, email = 'user@test.com'): Promise<string> {
   const id = userIdFor(email);
   await db.prepare(
     'INSERT OR IGNORE INTO users (id, email, display_name) VALUES (?, ?, ?)'
   ).bind(id, email, email.split('@')[0]).run();
+  await seedConsent(db, id);
   return id;
 }
 
@@ -74,6 +84,7 @@ export async function seedTrip(db: D1Database, opts: {
   await db.prepare(
     'INSERT OR IGNORE INTO users (id, email, display_name) VALUES (?, ?, ?)'
   ).bind(ownerUserId, ownerEmail, ownerEmail.split('@')[0]).run();
+  await seedConsent(db, ownerUserId);
 
   await db.prepare(
     'INSERT OR IGNORE INTO trips (id, name, owner_user_id, title, countries, published) VALUES (?, ?, ?, ?, ?, ?)'

@@ -92,10 +92,20 @@ describe('mint-restricted × AI 資料同意', () => {
     expect(await tokens()).toHaveLength(0);
   });
 
-  it('旅伴送出：旅伴沒同意、owner 也沒同意 → 仍簽發（共編者直接可用）', async () => {
+  it('旅伴送出：owner 有效、旅伴沒同意 → 簽發（旅伴免同意）', async () => {
+    await seedEvent(OWNER, 'accepted');
     const id = await seedRequest(COLLAB);
     expect((await mint(id)).status).toBe(200);
     expect(await tokens()).toHaveLength(1);
+  });
+
+  it('旅伴送出：owner 沒同意、旅伴有同意 → 不簽發，缺的是 owner（旅伴的同意不能代替 owner）', async () => {
+    await seedEvent(COLLAB, 'accepted');
+    const id = await seedRequest(COLLAB);
+    expect((await mint(id)).status).toBe(403);
+    expect(await tokens()).toHaveLength(0);
+    expect(JSON.parse((await audit()).at(-1)!.metadata).missing).toBe('owner');
+    expect(await reqState(id)).toMatchObject({ status: 'failed', terminal_reason: 'needs_consent' });
   });
 
   it('processing 狀態的請求（MINTABLE）缺 owner 同意 → 同樣 403、終結', async () => {
@@ -105,7 +115,8 @@ describe('mint-restricted × AI 資料同意', () => {
     expect(await reqState(id)).toMatchObject({ status: 'failed', terminal_reason: 'needs_consent' });
   });
 
-  it('送出者 email 大小寫不同（legacy 未正規化）仍對得上旅伴使用者 → 放行', async () => {
+  it('送出者 email 大小寫不同（legacy 未正規化）：owner 有效 → 放行', async () => {
+    await seedEvent(OWNER, 'accepted');
     expect((await mint(await seedRequest(COLLAB.toUpperCase()))).status).toBe(200);
   });
 

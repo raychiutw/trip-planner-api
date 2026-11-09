@@ -13,9 +13,8 @@
  * 預設只打同意端點（只寫前綴使用者的同意事件）。會建立 trip_request 的 AI 入口步驟需明確加 --with-requests：
  *   建立 request 會觸發通知流程（對 companion 的 trigger），staging 是否接了外部服務我們看不到，所以不預設執行。
  *
- * 判定以 staging 實際狀態為準：先 GET 同意狀態讀 `enforced`。
- *   enforced=false（目前預期）：驗證「不強制時 AI 入口放行、三個同意端點可用」；強制情境標 SKIP（只會在文案仍含占位符時發生，閘門本身沒有旗標）。
- *   enforced=true：多驗 403／同意後放行／旅伴／撤回後再被攔。
+ * 閘門一律強制（沒有旗標；GET 的 `enforced` 恆為 true，僅供舊版 client 相容）。
+ *   enforced=true：多驗 403／旅伴在 owner 未同意時被擋、owner 同意後旅伴免同意放行／撤回後再被攔。
  * 結束碼：0 無失敗（SKIP 不算失敗）；1 有項目失敗；2 安全閘拒絕或腳本自己跑不起來。
  */
 import { execFileSync } from 'node:child_process';
@@ -146,40 +145,28 @@ export async function runScenarios(io: Io, opts: { withRequests?: boolean } = {}
       return [r.status === 200 && again.status === 200 && r.json?.status === want && again.json?.status === want, `第一次 ${r.status}/${r.json?.status}、第二次 ${again.status}/${again.json?.status}（預期 ${want}）`];
     });
 
-    if (!enforced) {
-      await reqStep('不強制：owner 沒有同意也放行（201）', async () => {
-        const r = await submit(owner);
-        return [r.status === 201 && !String(code(r) ?? '').startsWith('AI_CONSENT'), `HTTP ${r.status} ${code(r) ?? ''}`];
-      });
-      await reqStep('不強制：旅伴沒有同意、owner 也沒有 → 放行（201）', async () => {
-        const r = await submit(collab);
-        return [r.status === 201 && !String(code(r) ?? '').startsWith('AI_CONSENT'), `HTTP ${r.status} ${code(r) ?? ''}`];
-      });
-      const why = 'staging 目前不強制（文案仍含占位符；閘門已無旗標），文案填妥並部署後才能驗';
-      for (const n of ['強制：未同意被攔 403 AI_CONSENT_REQUIRED', '強制：同意後放行', '強制：旅伴送出、owner 未同意 → 放行（201）', '強制：撤回後再次被攔']) skip(n, why);
-    } else {
-      await reqStep('強制：未同意被攔 403 AI_CONSENT_REQUIRED', async () => {
-        await io.http('DELETE', PATH, owner.token);
-        const r = await submit(owner);
-        return [r.status === 403 && code(r) === 'AI_CONSENT_REQUIRED', `HTTP ${r.status} ${code(r)}`];
-      });
-      await reqStep('強制：旅伴送出、owner 未同意 → 放行（201）', async () => {
-        await io.http('POST', PATH, collab.token, { version });
-        const r = await submit(collab);
-        return [r.status === 201, `HTTP ${r.status} ${code(r)}`];
-      });
-      await reqStep('強制：同意後放行', async () => {
-        await io.http('POST', PATH, owner.token, { version });
-        const a = await submit(owner);
-        const b = await submit(collab);
-        return [a.status === 201 && b.status === 201, `owner ${a.status}、旅伴 ${b.status}`];
-      });
-      await reqStep('強制：撤回後再次被攔', async () => {
-        await io.http('DELETE', PATH, owner.token);
-        const r = await submit(owner);
-        return [r.status === 403 && code(r) === 'AI_CONSENT_REQUIRED', `HTTP ${r.status} ${code(r)}`];
-      });
-    }
+    await reqStep('強制：未同意被攔 403 AI_CONSENT_REQUIRED', async () => {
+      await io.http('DELETE', PATH, owner.token);
+      const r = await submit(owner);
+      return [r.status === 403 && code(r) === 'AI_CONSENT_REQUIRED', `HTTP ${r.status} ${code(r)}`];
+    });
+    await reqStep('強制：旅伴送出、owner 未同意 → 403 AI_CONSENT_OWNER_REQUIRED（旅伴自己同意也不行）', async () => {
+      await io.http('POST', PATH, collab.token, { version });
+      const r = await submit(collab);
+      return [r.status === 403 && code(r) === 'AI_CONSENT_OWNER_REQUIRED', `HTTP ${r.status} ${code(r)}`];
+    });
+    await reqStep('強制：owner 同意後 owner 與旅伴（旅伴自己沒同意）都放行', async () => {
+      await io.http('POST', PATH, owner.token, { version });
+      await io.http('DELETE', PATH, collab.token); // 旅伴撤回後也放行：旅伴免同意
+      const a = await submit(owner);
+      const b = await submit(collab);
+      return [a.status === 201 && b.status === 201, `owner ${a.status}、旅伴 ${b.status}`];
+    });
+    await reqStep('強制：撤回後再次被攔', async () => {
+      await io.http('DELETE', PATH, owner.token);
+      const r = await submit(owner);
+      return [r.status === 403 && code(r) === 'AI_CONSENT_REQUIRED', `HTTP ${r.status} ${code(r)}`];
+    });
     skip('erasure 清除同意紀錄', '帳號刪除需 fresh-auth，無法由 smoke 自動觸發；由 tests/baseline/ai-data-consent.test.ts 對 eraseUserAccount 守住，清理則由本腳本的前綴刪除保證');
   } finally {
     await cleanup(io);
@@ -205,12 +192,6 @@ function realIo(t: Target): Io {
   };
 }
 
-export const OWNER_STEPS = `
-要在 staging 驗強制情境（閘門已無旗標，文案完整即強制；本腳本不會改 staging 設定或 secret）：
-  1. 確認同意文案（src/lib/ai-data-consent-text.ts）已無 {{...}} 占位符，並已部署到 staging。
-  2. 重新跑本腳本：GET 回 enforced=true 後，上面的 SKIP 項會改為實際驗證。
-`;
-
 async function main(argv: string[]): Promise<number> {
   let target: Target;
   try { target = assertStaging(argv); } catch (e) { console.error((e as Error).message); return 2; }
@@ -218,7 +199,6 @@ async function main(argv: string[]): Promise<number> {
   if (argv.includes('--cleanup')) { await cleanup(io); console.log('已清理前綴資料'); return 0; }
   const results = await runScenarios(io, { withRequests: argv.includes('--with-requests') });
   for (const r of results) console.log(`${r.status}  ${r.name} — ${r.detail}`);
-  if (results.some((r) => r.status === 'SKIP')) console.log(OWNER_STEPS);
   return results.some((r) => r.status === 'FAIL') ? 1 : 0;
 }
 

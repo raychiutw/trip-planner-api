@@ -28,6 +28,16 @@ export function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(deepCamel(data)), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
+/**
+ * 已發布行程的匿名成功讀取 → `public, max-age=0, must-revalidate`（PWA 離線可用快取、上線每次重新驗證，#1669）。
+ * 有任何登入身分一律不動（middleware 會補 private, no-store）；錯誤走 throw，不經這裡。
+ * 匿名與登入者讀已發布行程的 body 相同，故不需要 Vary: Authorization。
+ */
+export function publicIfAnonymous(res: Response, auth: AuthData | null, published: boolean): Response {
+  if (published && !auth) res.headers.set('Cache-Control', 'public, max-age=0, must-revalidate');
+  return res;
+}
+
 /** JSON response WITHOUT key conversion — for OAuth wire format that requires
  *  snake_case keys (RFC 6749 access_token / client_id etc.) */
 export function rawJson(data: unknown, status = 200): Response {

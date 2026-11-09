@@ -1,7 +1,7 @@
 import { logAudit, computeDiff } from '../../../lib/audit';
 import { assertNotTripRestricted, hasWritePermission, requireAuth, requireTripReadAccess } from '../../../lib/permissions';
 import { AppError } from '../../../errors';
-import { json, parseJsonBody, buildUpdateClause, getAuth } from '../../../lib/utils';
+import { json, parseJsonBody, buildUpdateClause, getAuth, publicIfAnonymous } from '../../../lib/utils';
 import type { Env } from '../../../env';
 
 // Migration 0045: dropped og_description/self_drive/food_prefs/auto_scroll/footer/is_default.
@@ -30,7 +30,8 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
 
   // v2.33.41 security: gate read access — published trips allow anonymous;
   // 否則必須 owner / member。
-  await requireTripReadAccess(db, getAuth(context), id);
+  const auth = getAuth(context);
+  const access = await requireTripReadAccess(db, auth, id);
 
   const row = await db.prepare('SELECT *, id AS tripId FROM trips WHERE id = ?').bind(id).first<Record<string, unknown>>();
   if (!row) throw new AppError('DATA_NOT_FOUND');
@@ -49,7 +50,7 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     sub_areas: d.sub_areas ? safeParseJson(d.sub_areas) : null,
   }));
 
-  return json(row);
+  return publicIfAnonymous(json(row), auth, access.published);
 };
 
 function safeParseJson(raw: string): unknown {

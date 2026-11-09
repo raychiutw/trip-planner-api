@@ -1,7 +1,7 @@
 import { requireAuth, requireTripReadAccess, requireTripWrite } from '../../../../lib/permissions';
 import { logAudit } from '../../../../lib/audit';
 import { AppError } from '../../../../errors';
-import { json, getAuth } from '../../../../lib/utils';
+import { json, getAuth, publicIfAnonymous } from '../../../../lib/utils';
 import type { Env } from '../../../../env';
 import { buildAllDays } from '../../../../lib/day-merge';
 
@@ -24,18 +24,19 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
   const all = new URL(context.request.url).searchParams.get('all') === '1';
 
   // v2.33.41 security: gate anonymous read.
-  await requireTripReadAccess(db, getAuth(context), id);
+  const auth = getAuth(context);
+  const access = await requireTripReadAccess(db, auth, id);
 
   if (!all) {
     const { results } = await db
       .prepare('SELECT id, day_num, date, day_of_week, label FROM trip_days WHERE trip_id = ? ORDER BY day_num ASC')
       .bind(id)
       .all();
-    return json(results);
+    return publicIfAnonymous(json(results), auth, access.published);
   }
 
   // Batch 模式：完整 days 由 buildAllDays 組（與公開 share 端點共用同一 orchestration）。
-  return json(await buildAllDays(db, id));
+  return publicIfAnonymous(json(await buildAllDays(db, id)), auth, access.published);
 };
 
 /**

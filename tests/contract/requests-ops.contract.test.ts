@@ -382,3 +382,48 @@ describe('/openapi.json 對這組每條路由的描述', () => {
     });
   }
 });
+
+// #1662：agent 收屍查詢（service token 帶 tripId）
+describe('GET /api/requests 帶 tripId 的 service token（#1662）', () => {
+  const T_A = 'ct-reqops-1662-a';
+  const T_B = 'ct-reqops-1662-b';
+  const insert = (trip: string, msg: string) =>
+    db.prepare("INSERT INTO trip_requests (trip_id, message, submitted_by, status) VALUES (?, ?, ?, 'processing')").bind(trip, msg, OWNER).run();
+
+  beforeAll(async () => {
+    await seedTrip(db, { id: T_A, owner: OWNER });
+    await seedTrip(db, { id: T_B, owner: OWNER });
+    await insert(T_A, '1662-a');
+    await insert(T_B, '1662-b');
+  });
+
+  it('ops:trips:read + tripId → 200，只回該 trip 的請求', async () => {
+    const svc = await serviceToken(db, ['ops:trips:read']);
+    const res = await api.request('GET', `/api/requests?status=processing&tripId=${T_A}`, { bearer: svc });
+    expect(res.status).toBe(200);
+    const body = await res.json() as Array<{ message: string }>;
+    expect(body.map((r) => r.message)).toEqual(['1662-a']);
+  });
+
+  it('service token 沒有 ops:trips:read + tripId → 403', async () => {
+    const svc = await serviceToken(db, ['companion']);
+    await errorOf(await api.request('GET', `/api/requests?tripId=${T_A}`, { bearer: svc }), 403);
+  });
+
+  it('一般使用者無該 trip 權限 → 403', async () => {
+    await errorOf(await api.get(`/api/requests?tripId=${T_A}`, { as: STRANGER }), 403);
+  });
+
+  it('restrictTrip 的使用者 token 查別的 trip → 403', async () => {
+    await errorOf(await api.get(`/api/requests?tripId=${T_B}`, { as: OWNER, scopes: ['trips:read'], restrictTrip: T_A }), 403);
+  });
+
+  it('不帶 tripId：ops:trips:read 查全部、無 scope 仍 400', async () => {
+    const svc = await serviceToken(db, ['ops:trips:read']);
+    const res = await api.request('GET', '/api/requests?status=processing&limit=50', { bearer: svc });
+    expect(res.status).toBe(200);
+    const msgs = ((await res.json()) as { items: Array<{ message: string }> }).items.map((r) => r.message);
+    expect(msgs).toEqual(expect.arrayContaining(['1662-a', '1662-b']));
+    await errorOf(await api.request('GET', '/api/requests', { bearer: await serviceToken(db, ['companion']) }), 400);
+  });
+});

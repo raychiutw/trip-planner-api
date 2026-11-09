@@ -8,12 +8,12 @@
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 
-// 文案是否填妥可切換：預設填妥（讓 POST 同意可成功）；contract.textReady.on=false 時回到真實的未填妥文案
+// 文案是否填妥可切換：預設用真實（已填妥）文案；textReady.on=false 時在文案尾端放回一個占位符，模擬未填妥
 const textReady = vi.hoisted(() => ({ on: true }));
 vi.mock('../../src/lib/ai-data-consent-text', async (importOriginal) => {
   const m = await importOriginal<typeof import('../../src/lib/ai-data-consent-text')>();
-  const fill = (s: string) => s.replaceAll('{{RESPONSIBLE_PARTY}}', 'x').replaceAll('{{CONTACT_EMAIL}}', 'x@example.test').replaceAll('{{TERMS_URL}}', 'https://example.test');
-  const texts = new Proxy(m.CONSENT_TEXTS, { get: (t, k) => (textReady.on && typeof k === 'string' && t[k] ? JSON.parse(fill(JSON.stringify(t[k]))) : (t as any)[k]) });
+  const unready = (x: any) => ({ ...x, sections: [...x.sections, { heading: '待填', items: ['{{CONTACT_EMAIL}}'] }] });
+  const texts = new Proxy(m.CONSENT_TEXTS, { get: (t, k) => (!textReady.on && typeof k === 'string' && t[k] ? unready(t[k]) : (t as any)[k]) });
   return { ...m, CONSENT_TEXTS: texts };
 });
 import { createTestDb, disposeMiniflare } from '../baseline/setup';

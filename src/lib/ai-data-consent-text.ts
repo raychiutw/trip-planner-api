@@ -4,8 +4,9 @@
  * - **版本內容不可變**：已發出的版本不得改寫文字；實質變更（處理方、資料類別、用途、保存或撤回方式）→ 新增版本、
  *   把 CURRENT_CONSENT_VERSION 指向它。錯字、排版、不影響使用者權利的措辭可原地修正，不升版。
  * - 文字放在程式碼裡，經 PR 審查；不放資料庫。web 與 Flutter 只顯示 server 回的這份。
- * - 責任人、聯絡信箱、處理方條款連結三處是**待填占位符**（{{...}}）。只要還有占位符，isConsentTextComplete() 就是 false，
- *   旗標 AI_CONSENT_ENFORCED 開了也不會強制（見 ai-data-consent.ts）。owner 填妥後以 PR 取代占位符。
+ * - 責任人、聯絡信箱、處理方條款連結已由 owner 提供並填入（2026-11-09）。若日後再出現占位符（{{...}}），
+ *   isConsentTextComplete() 會是 false，旗標 AI_CONSENT_ENFORCED 開了也不會強制（見 ai-data-consent.ts）。
+ *   旗標本身仍預設關：填妥文案不等於啟用強制，啟用時機由 owner 另行決定。
  */
 
 export interface ConsentSection {
@@ -47,7 +48,7 @@ export const CONSENT_TEXTS: Record<string, ConsentText> = {
       {
         heading: '處理方',
         items: [
-          'Anthropic（Claude）。資料的保存期間與是否用於模型訓練，依處理方條款，詳見連結：{{TERMS_URL}}',
+          'Anthropic（Claude）。資料的保存期間與是否用於模型訓練，依處理方條款，詳見連結：https://www.anthropic.com/legal/commercial-terms',
           '另外使用 Google Maps 查詢景點資料；查詢內容只有景點名稱或地點識別碼，不包含個人資料。',
         ],
       },
@@ -65,7 +66,7 @@ export const CONSENT_TEXTS: Record<string, ConsentText> = {
       },
       {
         heading: '責任人與聯絡方式',
-        items: ['責任人：{{RESPONSIBLE_PARTY}}；聯絡信箱：{{CONTACT_EMAIL}}'],
+        items: ['責任人：邱淞瑋；聯絡信箱：lean.lean@gmail.com'],
       },
     ],
     withdrawal: [

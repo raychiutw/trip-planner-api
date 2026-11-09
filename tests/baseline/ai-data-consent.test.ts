@@ -247,42 +247,27 @@ describe.each(ENTRIES)('受管制入口：$name', (entry) => {
     expect(await entry.count()).toBeGreaterThan(before);
   };
 
-  it('送出者沒同意 → 403 AI_CONSENT_REQUIRED（status none），不建立 request', async () => {
-    await clearEvents();
-    await accept(OWNER);
-    await blockedWithoutRows(COLLAB, 'AI_CONSENT_REQUIRED', 'none');
-  });
-  it('送出者撤回／舊版 → status withdrawn／stale', async () => {
-    await clearEvents();
-    await accept(OWNER); await accept(COLLAB); await withdraw(COLLAB);
-    await blockedWithoutRows(COLLAB, 'AI_CONSENT_REQUIRED', 'withdrawn');
-    await clearEvents();
-    await accept(OWNER); await seedEvent(COLLAB, 'ai-data-v0', 'accepted');
-    await blockedWithoutRows(COLLAB, 'AI_CONSENT_REQUIRED', 'stale');
-  });
-  it('旅伴送出、送出者有同意但 owner 沒有 → 403 AI_CONSENT_OWNER_REQUIRED，不建立 request', async () => {
-    await clearEvents();
-    await accept(COLLAB);
-    await blockedWithoutRows(COLLAB, 'AI_CONSENT_OWNER_REQUIRED', 'none');
-    await seedEvent(OWNER, 'ai-data-v0', 'accepted');
-    await blockedWithoutRows(COLLAB, 'AI_CONSENT_OWNER_REQUIRED', 'stale');
-    await accept(OWNER); await withdraw(OWNER);
-    await blockedWithoutRows(COLLAB, 'AI_CONSENT_OWNER_REQUIRED', 'withdrawn');
-  });
-  it('雙方都沒同意 → 先回送出者（AI_CONSENT_REQUIRED）；owner 有、旅伴沒有 → AI_CONSENT_REQUIRED', async () => {
-    await clearEvents();
-    await blockedWithoutRows(COLLAB, 'AI_CONSENT_REQUIRED', 'none');
-    await accept(OWNER);
-    await blockedWithoutRows(COLLAB, 'AI_CONSENT_REQUIRED', 'none');
-  });
-  it('owner 自己送：只檢查一次，沒同意回 AI_CONSENT_REQUIRED（不是 OWNER_REQUIRED）', async () => {
+  it('owner 自己送、沒同意 → 403 AI_CONSENT_REQUIRED（status none），不建立 request', async () => {
     await clearEvents();
     await blockedWithoutRows(OWNER, 'AI_CONSENT_REQUIRED', 'none');
   });
-  it('雙方都 valid → 成功', async () => {
+  it('owner 自己送、撤回／舊版 → status withdrawn／stale', async () => {
     await clearEvents();
-    await accept(OWNER); await accept(COLLAB);
+    await accept(OWNER); await withdraw(OWNER);
+    await blockedWithoutRows(OWNER, 'AI_CONSENT_REQUIRED', 'withdrawn');
+    await clearEvents();
+    await seedEvent(OWNER, 'ai-data-v0', 'accepted');
+    await blockedWithoutRows(OWNER, 'AI_CONSENT_REQUIRED', 'stale');
+  });
+  it('旅伴（共編者）直接放行：自己沒同意、owner 也沒同意都能送', async () => {
+    await clearEvents();
     await allowed(COLLAB);
+    await accept(OWNER); await withdraw(OWNER);
+    await allowed(COLLAB);
+  });
+  it('owner 同意後可送出', async () => {
+    await clearEvents();
+    await accept(OWNER);
     await allowed(OWNER);
   });
   it('撤回後新請求立即被擋；重新同意後恢復', async () => {
@@ -301,13 +286,12 @@ describe.each(ENTRIES)('受管制入口：$name', (entry) => {
     expect(res.status).toBe(403);
     expect(((await res.json()) as any).error.code).toBe('PERM_DENIED');
   });
-  it('不需任何旗標：沒有任何同意的 owner／旅伴一律被攔 403', async () => {
+  it('不需任何旗標：沒有同意的 owner 被攔 403；旅伴放行', async () => {
     await clearEvents();
-    for (const who of [OWNER, COLLAB]) {
-      const res = await entry.call(who);
-      expect(res.status).toBe(403);
-      expect(((await res.json()) as any).error.code).toMatch(/^AI_CONSENT_(OWNER_)?REQUIRED$/);
-    }
+    const res = await entry.call(OWNER);
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as any).error.code).toBe('AI_CONSENT_REQUIRED');
+    expect(entry.ok).toContain((await entry.call(COLLAB)).status);
   });
   it('服務 token（無 userId）不套用閘門', async () => {
     await clearEvents();

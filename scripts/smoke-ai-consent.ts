@@ -156,17 +156,17 @@ export async function runScenarios(io: Io, opts: { withRequests?: boolean } = {}
         return [r.status === 201 && !String(code(r) ?? '').startsWith('AI_CONSENT'), `HTTP ${r.status} ${code(r) ?? ''}`];
       });
       const why = 'staging 目前不強制（文案仍含占位符；閘門已無旗標），文案填妥並部署後才能驗';
-      for (const n of ['強制：未同意被攔 403 AI_CONSENT_REQUIRED', '強制：同意後放行', '強制：旅伴送出、owner 未同意 → AI_CONSENT_OWNER_REQUIRED', '強制：撤回後再次被攔']) skip(n, why);
+      for (const n of ['強制：未同意被攔 403 AI_CONSENT_REQUIRED', '強制：同意後放行', '強制：旅伴送出、owner 未同意 → 放行（201）', '強制：撤回後再次被攔']) skip(n, why);
     } else {
       await reqStep('強制：未同意被攔 403 AI_CONSENT_REQUIRED', async () => {
         await io.http('DELETE', PATH, owner.token);
         const r = await submit(owner);
         return [r.status === 403 && code(r) === 'AI_CONSENT_REQUIRED', `HTTP ${r.status} ${code(r)}`];
       });
-      await reqStep('強制：旅伴送出、owner 未同意 → AI_CONSENT_OWNER_REQUIRED', async () => {
+      await reqStep('強制：旅伴送出、owner 未同意 → 放行（201）', async () => {
         await io.http('POST', PATH, collab.token, { version });
         const r = await submit(collab);
-        return [r.status === 403 && code(r) === 'AI_CONSENT_OWNER_REQUIRED', `HTTP ${r.status} ${code(r)}`];
+        return [r.status === 201, `HTTP ${r.status} ${code(r)}`];
       });
       await reqStep('強制：同意後放行', async () => {
         await io.http('POST', PATH, owner.token, { version });

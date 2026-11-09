@@ -116,13 +116,13 @@ describe('整套情境對本地 app 乾跑', () => {
     d1.close();
   });
 
-  it('強制（不需旗標）：強制組全過（403／旅伴 OWNER_REQUIRED／同意後放行／撤回再被攔）、殘留為 0', async () => {
+  it('強制（不需旗標）：強制組全過（403／旅伴放行／同意後放行／撤回再被攔）、殘留為 0', async () => {
     const { d1, io } = localIo();
     const before = snapshot(d1);
     const results = await runScenarios(io, { withRequests: true });
     expect(results.filter((r) => r.status === 'FAIL')).toEqual([]);
     expect(results.filter((r) => r.status === 'PASS').map((r) => r.name)).toEqual(expect.arrayContaining([
-      '強制：未同意被攔 403 AI_CONSENT_REQUIRED', '強制：旅伴送出、owner 未同意 → AI_CONSENT_OWNER_REQUIRED', '強制：同意後放行', '強制：撤回後再次被攔',
+      '強制：未同意被攔 403 AI_CONSENT_REQUIRED', '強制：旅伴送出、owner 未同意 → 放行（201）', '強制：同意後放行', '強制：撤回後再次被攔',
     ]));
     expect(results.some((r) => r.name.startsWith('不強制'))).toBe(false);
     expect(snapshot(d1)).toEqual(before);

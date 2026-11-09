@@ -14,13 +14,13 @@
 ## 上線前確認
 
 1. 文案已簽核。若之後有實質修改，必須遞增版本（`CURRENT_CONSENT_VERSION`），舊版同意者會變成 `stale` 並需重新同意。
-2. 確認 web 與 Flutter 用戶端已有處理 `AI_CONSENT_REQUIRED`／`AI_CONSENT_OWNER_REQUIRED` 403 的畫面（否則使用者只看到失敗）。
+2. 確認 web 與 Flutter 用戶端已有處理 `AI_CONSENT_REQUIRED` 403 的畫面（否則使用者只看到失敗）。
 3. 範圍：舊入口已無 web 流量，**以新 api 為準**。
 
 ## 上線順序
 
 1. 合併後由 deploy.yml 部署到 **staging**（CI 只部署 staging），staging 隨即強制。
-2. 跑 `node scripts/smoke-ai-consent.ts --with-requests`：`enforced=true`，強制情境（403、同意後放行、旅伴 `AI_CONSENT_OWNER_REQUIRED`、撤回後再攔）應全 PASS。`--with-requests` 會建立 trip_request 並觸發通知流程，確認 staging 沒有接到會誤處理測試請求的外部服務再加。
+2. 跑 `node scripts/smoke-ai-consent.ts --with-requests`：`enforced=true`，強制情境（403、同意後放行、旅伴放行、撤回後再攔）應全 PASS。`--with-requests` 會建立 trip_request 並觸發通知流程，確認 staging 沒有接到會誤處理測試請求的外部服務再加。
 3. 用真實帳號在 web 與 App 各走一次：未同意被攔 → 同意 → 送出成功 → 撤回 → 再被攔。
 4. staging 無異常後，才對 **production**（`trip-planner-api-production`）手動 `wrangler deploy --env production`（CI 不會部署）；驗上線要比對 openapi 路徑，不要只看 health。
 5. 強制生效當下已排隊的請求，會在 mint 時缺同意而被終結為 `needs_consent`，屬預期行為，事前先通知使用者。
@@ -29,7 +29,7 @@
 
 - `GET /api/account/ai-data-consent` 回 `enforced: true`。
 - 沒同意的測試帳號送出請求 → 403 `AI_CONSENT_REQUIRED`，且 `trip_requests` 沒新增列。
-- 同意後送出 → 201；旅伴送出而 owner 沒同意 → 403 `AI_CONSENT_OWNER_REQUIRED`。
+- 同意後送出 → 201；旅伴送出（不論 owner 是否同意）→ 201。
 - 觀察 `auth_audit_log` 的 `no_data_consent` 事件與 `trip_requests.terminal_reason = 'needs_consent'` 的數量是否合理。
 
 ## 緊急關閉

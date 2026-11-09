@@ -97,7 +97,7 @@ describe('trip_invitations（每日，30 天）', () => {
     inv('unacc-exp-28d', agoSql(28).d, null);
     inv('pending', new Date(nowMs() + D).toISOString(), null);
     await runCleanup(mkEnv(), CRON_INVITATIONS);
-    expect(ids('SELECT token_hash AS k FROM trip_invitations')).toEqual(['acc-29d', 'pending', 'unacc-exp-28d']);
+    expect(ids('SELECT token_hash AS k FROM trip_invitations')).toEqual(['acc-28d', 'pending', 'unacc-exp-28d']);
     await runCleanup(mkEnv(), CRON_INVITATIONS);
     expect(count('trip_invitations')).toBe(3);
   });

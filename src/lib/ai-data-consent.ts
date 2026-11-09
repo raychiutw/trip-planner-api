@@ -8,7 +8,7 @@
  *   stale     最新是 accepted，但版本≠目前版本（說明有實質變更，需重新同意）
  *   withdrawn 最新是 withdrawn
  *
- * 是否強制＝旗標 AI_CONSENT_ENFORCED 為 true **且** 目前版本的文字已無待填占位符；任一不成立，入口行為與沒有此功能時完全相同。
+ * 是否強制＝目前版本的文字已無待填占位符（沒有旗標，閘門永遠強制）；文字仍含占位符時入口行為與沒有此功能時完全相同。
  */
 import { AppError } from '../errors';
 import type { AuthData, Env } from '../env';
@@ -30,9 +30,9 @@ export function isConsentTextComplete(text: ConsentText = currentConsentText()):
   return !PLACEHOLDER_PATTERN.test(JSON.stringify(text));
 }
 
-/** 旗標值只認 'true'（其餘一律視為關閉）。 */
-export function isConsentEnforced(env: Pick<Env, 'AI_CONSENT_ENFORCED'>): boolean {
-  return env.AI_CONSENT_ENFORCED === 'true' && isConsentTextComplete();
+/** 閘門永遠強制；唯一保險是文案仍含占位符時不強制。 */
+export function isConsentEnforced(): boolean {
+  return isConsentTextComplete();
 }
 
 interface EventRow { event: string; version: string; created_at: string }
@@ -88,8 +88,8 @@ export async function recordWithdrawn(db: D1Database, userId: string): Promise<b
  * 必須在「已確認有該行程寫權限」之後、任何寫入之前呼叫。
  * 不是 user-bound 的 token（服務 token、無 userId）不套用——那是系統排程，不是某位使用者的資料交付。
  */
-export async function assertAiConsent(env: Pick<Env, 'DB' | 'AI_CONSENT_ENFORCED'>, auth: AuthData, tripId: string): Promise<void> {
-  if (!isConsentEnforced(env)) return;
+export async function assertAiConsent(env: Pick<Env, 'DB'>, auth: AuthData, tripId: string): Promise<void> {
+  if (!isConsentEnforced()) return;
   if (auth.isServiceToken || !auth.userId) return;
 
   const sender = await getConsentState(env.DB, auth.userId);
@@ -117,8 +117,8 @@ function consentError(code: 'AI_CONSENT_REQUIRED' | 'AI_CONSENT_OWNER_REQUIRED',
  * 回傳缺同意的一方（'owner' 或 'submitter'），都有效或不強制時回 null。
  * 送出者不是一般使用者（submitted_by 不是任何使用者的 email，例如服務／系統送出）→ 只檢查 owner，同入口閘門的服務 token 豁免。
  */
-export async function consentGapAtMint(env: Pick<Env, 'DB' | 'AI_CONSENT_ENFORCED'>, ownerUserId: string, submittedBy: string | null): Promise<'owner' | 'submitter' | null> {
-  if (!isConsentEnforced(env)) return null;
+export async function consentGapAtMint(env: Pick<Env, 'DB'>, ownerUserId: string, submittedBy: string | null): Promise<'owner' | 'submitter' | null> {
+  if (!isConsentEnforced()) return null;
   if ((await getConsentState(env.DB, ownerUserId)).status !== 'valid') return 'owner';
   if (!submittedBy) return null;
   const submitter = await env.DB.prepare('SELECT id FROM users WHERE email = ? COLLATE NOCASE').bind(submittedBy).first<{ id: string }>();

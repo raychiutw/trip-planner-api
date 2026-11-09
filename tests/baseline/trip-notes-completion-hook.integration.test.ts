@@ -13,7 +13,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createTestDb, disposeMiniflare } from './setup';
-import { mockEnv, seedTrip, seedUser } from './helpers';
+import { mockEnv, seedTrip, seedUser, seedAiConsent } from './helpers';
 import { createApi, type Api } from './http';
 import { cleanupNotes } from './cleanup-notes';
 import { serviceTokenFor } from './service-token';
@@ -35,6 +35,7 @@ beforeAll(async () => {
   api = createApi({ env });
   await seedUser(db, ownerEmail);
   await seedTrip(db, { id: tripId, owner: ownerEmail });
+  await seedAiConsent(db, ownerEmail);
   serviceToken = await serviceTokenFor(db, { clientId: 's14-cli', scopes: ['companion'] });
 });
 

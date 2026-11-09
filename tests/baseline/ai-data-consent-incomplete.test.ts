@@ -26,7 +26,7 @@ const restoreReal = () => {
 
 beforeAll(async () => {
   db = await createTestDb();
-  api = createApi({ env: mockEnv(db, { AI_CONSENT_ENFORCED: 'true' }) });
+  api = createApi({ env: mockEnv(db) });
   await seedTrip(db, { id: TRIP, owner: OWNER });
   await seedEntry(db, await getDayId(db, TRIP, 1));
 });
@@ -70,14 +70,13 @@ describe('文案', () => {
     expect(t).toContain('已經開始的工作');
     expect(t).toContain('無法收回');
   });
-  it('文字已完成：旗標開 → isConsentEnforced 為 true；旗標關 → false（上線仍由旗標決定）', () => {
-    expect(isConsentEnforced({ AI_CONSENT_ENFORCED: 'true' })).toBe(true);
-    expect(isConsentEnforced({})).toBe(false);
+  it('文字已完成 → isConsentEnforced 為 true（不需任何旗標）', () => {
+    expect(isConsentEnforced()).toBe(true);
   });
-  it('旗標開但文字未完成 → isConsentEnforced 為 false', () => {
+  it('文字未完成 → isConsentEnforced 為 false（占位符保險）', () => {
     withPlaceholders();
     try {
-      expect(isConsentEnforced({ AI_CONSENT_ENFORCED: 'true' })).toBe(false);
+      expect(isConsentEnforced()).toBe(false);
     } finally {
       restoreReal();
     }

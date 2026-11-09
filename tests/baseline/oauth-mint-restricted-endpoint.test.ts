@@ -20,7 +20,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { createTestDb, disposeMiniflare } from './setup';
-import { mockEnv, seedTrip } from './helpers';
+import { mockEnv, seedTrip, seedAiConsent } from './helpers';
 import { createApi, type Api } from './http';
 import { D1Adapter } from '../../src/lib/oauth-d1-adapter';
 
@@ -89,6 +89,7 @@ beforeAll(async () => {
   db = await createTestDb();
   api = createApi({ env: mockEnv(db, { TRIPLINE_API_SECRET: SECRET }) });
   ownerUserId = (await seedTrip(db, { id: TRIP, owner: OWNER_EMAIL })).ownerUserId;
+  await seedAiConsent(db, OWNER_EMAIL);
 }, 30000);
 
 beforeEach(async () => {

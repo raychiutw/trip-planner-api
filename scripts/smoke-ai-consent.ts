@@ -1,20 +1,20 @@
 /// <reference types="node" />
 /**
- * AI 資料同意（AI_CONSENT_ENFORCED）的 staging smoke（trip-planner#1615）。
+ * AI 資料同意閘門的 staging smoke（trip-planner#1615）。
  *
  *   node scripts/smoke-ai-consent.ts                    # 依 staging「目前實際狀態」驗證同意端點（種測試帳號 → 驗證 → 清理）
  *   node scripts/smoke-ai-consent.ts --with-requests    # 再驗三個受管制入口之一（POST /api/requests）的放行／攔截
  *   node scripts/smoke-ai-consent.ts --cleanup    # 只清前綴資料
  *
  * ⚠ 只准對 staging：base URL 與 D1 名稱走白名單，production 字樣、--env 一律拒絕（assertStaging，有測試守住）。
- *   D1 讀寫走 wrangler 既有登入（--remote，指令不帶 --env）；不讀、不印任何機密；不修改 staging 的旗標、文案或 secret。
+ *   D1 讀寫走 wrangler 既有登入（--remote，指令不帶 --env）；不讀、不印任何機密；不修改 staging 的文案或 secret。
  * 測試資料一律以 `smoke1615-` 為前綴，結束時只刪這個前綴的列（使用者、行程、request、同意事件、audit_log、rate limit 桶）。
  *   api_logs 是每個請求都會寫的通用存取紀錄，沒有可歸屬的前綴欄位，不刪（不屬於測試資料）。
  * 預設只打同意端點（只寫前綴使用者的同意事件）。會建立 trip_request 的 AI 入口步驟需明確加 --with-requests：
  *   建立 request 會觸發通知流程（對 companion 的 trigger），staging 是否接了外部服務我們看不到，所以不預設執行。
  *
  * 判定以 staging 實際狀態為準：先 GET 同意狀態讀 `enforced`。
- *   enforced=false（目前預期）：驗證「不強制時 AI 入口放行、三個同意端點可用」；強制情境標 SKIP 並說明要 owner 啟用旗標後才能驗。
+ *   enforced=false（目前預期）：驗證「不強制時 AI 入口放行、三個同意端點可用」；強制情境標 SKIP（只會在文案仍含占位符時發生，閘門本身沒有旗標）。
  *   enforced=true：多驗 403／同意後放行／旅伴／撤回後再被攔。
  * 結束碼：0 無失敗（SKIP 不算失敗）；1 有項目失敗；2 安全閘拒絕或腳本自己跑不起來。
  */
@@ -155,7 +155,7 @@ export async function runScenarios(io: Io, opts: { withRequests?: boolean } = {}
         const r = await submit(collab);
         return [r.status === 201 && !String(code(r) ?? '').startsWith('AI_CONSENT'), `HTTP ${r.status} ${code(r) ?? ''}`];
       });
-      const why = 'staging 目前不強制（AI_CONSENT_ENFORCED 未開或文案仍含占位符），需 owner 啟用旗標後才能驗';
+      const why = 'staging 目前不強制（文案仍含占位符；閘門已無旗標），文案填妥並部署後才能驗';
       for (const n of ['強制：未同意被攔 403 AI_CONSENT_REQUIRED', '強制：同意後放行', '強制：旅伴送出、owner 未同意 → AI_CONSENT_OWNER_REQUIRED', '強制：撤回後再次被攔']) skip(n, why);
     } else {
       await reqStep('強制：未同意被攔 403 AI_CONSENT_REQUIRED', async () => {
@@ -206,11 +206,9 @@ function realIo(t: Target): Io {
 }
 
 export const OWNER_STEPS = `
-要在 staging 驗強制情境，owner 需自行完成（本腳本與本 PR 都不會改 staging 設定或 secret）：
-  1. 同意文案（src/lib/ai-data-consent-text.ts）的三個占位符（條款連結、責任人、聯絡信箱）填妥並簽核、合併、部署到 staging。
-  2. 設定 staging Worker（trip-planner-api）的 AI_CONSENT_ENFORCED=true（vars 或 wrangler secret，擇一；只准 staging，不是 production）。
-  3. 重新跑本腳本：enforced=true 後上面的 SKIP 項會改為實際驗證。
-  4. 驗完要關回：把 AI_CONSENT_ENFORCED 移除或改成非 'true'，再部署／更新 secret（同意紀錄保留，行為立即回到不強制）。
+要在 staging 驗強制情境（閘門已無旗標，文案完整即強制；本腳本不會改 staging 設定或 secret）：
+  1. 確認同意文案（src/lib/ai-data-consent-text.ts）已無 {{...}} 占位符，並已部署到 staging。
+  2. 重新跑本腳本：GET 回 enforced=true 後，上面的 SKIP 項會改為實際驗證。
 `;
 
 async function main(argv: string[]): Promise<number> {

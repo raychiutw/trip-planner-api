@@ -26,7 +26,6 @@ vi.mock('../../src/lib/ai-data-consent-text', async (importOriginal) => {
 
 let db: D1Database;
 let apiOn: Api;
-let apiOff: Api;
 let ownerId: string;
 const uid = userIdFor;
 
@@ -51,8 +50,7 @@ const clean = async () => {
 
 beforeAll(async () => {
   db = await createTestDb();
-  apiOn = createApi({ env: mockEnv(db, { TRIPLINE_API_SECRET: SECRET, AI_CONSENT_ENFORCED: 'true' }) });
-  apiOff = createApi({ env: mockEnv(db, { TRIPLINE_API_SECRET: SECRET }) });
+  apiOn = createApi({ env: mockEnv(db, { TRIPLINE_API_SECRET: SECRET }) });
   ownerId = (await seedTrip(db, { id: TRIP, owner: OWNER })).ownerUserId;
   await seedUser(db, COLLAB);
 }, 30000);
@@ -154,11 +152,6 @@ describe('mint-restricted × AI 資料同意', () => {
     const id = await seedRequest(OWNER);
     expect((await mint(id)).status).toBe(403);
     expect((await audit()).at(-1)).toMatchObject({ failure_reason: 'no_data_consent' });
-  });
-
-  it('旗標關閉：沒有任何同意也照常簽發（行為與現況相同）', async () => {
-    const res = await mint(await seedRequest(COLLAB), apiOff);
-    expect(res.status).toBe(200);
   });
 
   it('owner 自己送出：只查一次，owner valid → 簽發', async () => {

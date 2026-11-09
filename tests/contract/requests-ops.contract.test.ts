@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import { createApp } from '../../src/app';
 import { createTestDb, disposeMiniflare } from '../baseline/setup';
-import { mockEnv, seedTrip } from '../baseline/helpers';
+import { mockEnv, seedTrip, seedAiConsent } from '../baseline/helpers';
 import { createApi, type Api } from '../baseline/http';
 import { serviceToken } from '../baseline/service-token';
 import { _resetGcpTokenCacheForTest } from '../../src/lib/gcp-monitoring';
@@ -67,6 +67,7 @@ beforeAll(async () => {
   db = await createTestDb();
   api = createApi({ env: mockEnv(db, { ALLOWED_ORIGINS: 'https://trip-planner-dby.pages.dev' }) });
   await seedTrip(db, { id: TRIP, owner: OWNER });
+  await seedAiConsent(db, OWNER); await seedAiConsent(db, STRANGER);
   companion = await serviceToken(db, ['companion']);
   opsMaps = await serviceToken(db, ['ops:maps']);
   opsPoi = await serviceToken(db, ['ops:poi']);

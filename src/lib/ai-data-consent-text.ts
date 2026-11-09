@@ -5,8 +5,8 @@
  *   把 CURRENT_CONSENT_VERSION 指向它。錯字、排版、不影響使用者權利的措辭可原地修正，不升版。
  * - 文字放在程式碼裡，經 PR 審查；不放資料庫。web 與 Flutter 只顯示 server 回的這份。
  * - 責任人、聯絡信箱、處理方條款連結已由 owner 提供並填入（2026-11-09）。若日後再出現占位符（{{...}}），
- *   isConsentTextComplete() 會是 false，旗標 AI_CONSENT_ENFORCED 開了也不會強制（見 ai-data-consent.ts）。
- *   旗標本身仍預設關：填妥文案不等於啟用強制，啟用時機由 owner 另行決定。
+ *   isConsentTextComplete() 會是 false，閘門就不會強制（見 ai-data-consent.ts）。
+ *   閘門已無旗標（2026-11-09 owner 決定直接打開）：文案填妥即強制。
  */
 
 export interface ConsentSection {

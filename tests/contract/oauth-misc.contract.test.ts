@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest';
 
 import { createTestDb, disposeMiniflare } from '../baseline/setup';
-import { mockEnv, seedTrip, userIdFor } from '../baseline/helpers';
+import { mockEnv, seedTrip, userIdFor, seedAiConsent } from '../baseline/helpers';
 import { createApi, type Api } from '../baseline/http';
 import { D1Adapter } from '../../src/lib/oauth-d1-adapter';
 import { hashPassword } from '../../src/lib/password';
@@ -55,6 +55,7 @@ beforeAll(async () => {
   await db.prepare(`INSERT OR REPLACE INTO client_apps (client_id, client_type, client_secret_hash, app_name, redirect_uris, allowed_scopes, status)
     VALUES (?, 'confidential', ?, 'CT Conf', ?, '["openid"]', 'active')`).bind(CONF, secretHash, JSON.stringify([CB])).run();
   ownerUserId = (await seedTrip(db, { id: TRIP, owner: OWNER })).ownerUserId;
+  await seedAiConsent(db, OWNER);
 }, 30000);
 
 afterAll(async () => {

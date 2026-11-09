@@ -14,7 +14,7 @@ vi.mock('../../src/lib/maps-lock', () => ({
 }));
 
 import { createTestDb, disposeMiniflare } from './setup';
-import { mockEnv, seedTrip, userIdFor } from './helpers';
+import { mockEnv, seedTrip, userIdFor, seedAiConsent } from './helpers';
 import { createApi, type Api } from './http';
 import { computeRoute } from '../../src/lib/maps/google-client';
 import { cleanupTrips } from './cleanup-trips';
@@ -43,6 +43,7 @@ beforeAll(async () => {
   db = await createTestDb();
   api = createApi({ env: mockEnv(db, { GOOGLE_MAPS_API_KEY: 'test-key', ALLOWED_ORIGINS: 'https://trip-planner-dby.pages.dev' } as Partial<Env>) });
   await seedTrip(db, { id: TRIP, owner: OWNER });
+  await seedAiConsent(db, OWNER); await seedAiConsent(db, OTHER);
   const otherId = userIdFor(OTHER);
   await db.prepare('INSERT OR IGNORE INTO users (id, email, display_name) VALUES (?, ?, ?)').bind(otherId, OTHER, 'other').run();
   await db.prepare("INSERT OR IGNORE INTO trip_permissions (user_id, trip_id, role) VALUES (?, ?, 'member')").bind(otherId, TRIP).run();

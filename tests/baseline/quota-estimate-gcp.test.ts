@@ -257,6 +257,17 @@ describe('失敗原因記錄（#76：502 之前完全看不出是哪一步失敗
     spy.mockRestore();
   });
 
+  it('Google 回的錯誤碼格式不符（含空白、符號）→ 不寫進 log，只留 stage', async () => {
+    monitoring = () => new Response(JSON.stringify({ error: { status: 'bad code & token=abc' } }), { status: 403 });
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await getQuota(configured());
+    const log = warnings(spy).join('\n');
+    expect(log).toContain('stage=monitoring-http-403');
+    expect(log).not.toContain('google=');
+    expect(log).not.toContain('token=abc');
+    spy.mockRestore();
+  });
+
   it('Cloud Monitoring 回 403 PERMISSION_DENIED → 記 monitoring-http-403 與 status 碼，且不含 token', async () => {
     monitoring = () => new Response(JSON.stringify({ error: { status: 'PERMISSION_DENIED', message: 'private-detail' } }), { status: 403 });
     const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});

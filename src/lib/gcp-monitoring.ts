@@ -30,6 +30,27 @@ const SCOPE_MONITORING_READ = 'https://www.googleapis.com/auth/monitoring.read';
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 const MONITORING_HOST = 'https://monitoring.googleapis.com';
 const TOKEN_TTL_SEC = 3600;
+
+/**
+ * 失敗原因只記「哪一步」與 Google 回的短錯誤碼（如 invalid_grant、PERMISSION_DENIED），
+ * 不記金鑰、token、錯誤描述全文。#76：原本每個失敗分支都直接 return null，502 看不出差別。
+ */
+function logFailure(stage: string, googleCode?: string): void {
+  console.warn(`[gcp-monitoring] stage=${stage}${googleCode ? ` google=${googleCode}` : ''}`);
+}
+
+/** 取 Google 錯誤回應裡的短代碼；格式不符就不記（不把任意內容寫進 log）。 */
+async function googleErrorCode(resp: Response): Promise<string | undefined> {
+  try {
+    const j = (await resp.json()) as { error?: unknown };
+    const code = typeof j.error === 'string' ? j.error
+      : j.error && typeof (j.error as { status?: unknown }).status === 'string' ? (j.error as { status: string }).status
+      : undefined;
+    return code && /^[A-Za-z0-9_.-]{1,64}$/.test(code) ? code : undefined;
+  } catch {
+    return undefined;
+  }
+}
 const TOKEN_CACHE_REFRESH_BUFFER_SEC = 600; // refresh if < 10 min remaining
 
 interface ServiceAccountKey {
@@ -61,16 +82,26 @@ interface GcpMonitoringEnv {
  * caller returns 502 MAPS_UPSTREAM_FAILED (no fake-data fallback).
  */
 function parseServiceAccount(rawJson: string | undefined): ServiceAccountKey | null {
-  if (!rawJson || typeof rawJson !== 'string') return null;
-  try {
-    const parsed = JSON.parse(rawJson) as ServiceAccountKey;
-    if (parsed.type !== 'service_account') return null;
-    if (typeof parsed.private_key !== 'string' || !parsed.private_key.includes('BEGIN')) return null;
-    if (typeof parsed.client_email !== 'string') return null;
-    return parsed;
-  } catch {
+  if (!rawJson || typeof rawJson !== 'string') {
+    logFailure('sa-key-missing');
     return null;
   }
+  let parsed: ServiceAccountKey;
+  try {
+    parsed = JSON.parse(rawJson) as ServiceAccountKey;
+  } catch {
+    logFailure('sa-key-not-json');
+    return null;
+  }
+  if (
+    parsed.type !== 'service_account' ||
+    typeof parsed.private_key !== 'string' || !parsed.private_key.includes('BEGIN') ||
+    typeof parsed.client_email !== 'string'
+  ) {
+    logFailure('sa-key-bad-shape');
+    return null;
+  }
+  return parsed;
 }
 
 /**
@@ -100,6 +131,7 @@ async function getAccessToken(account: ServiceAccountKey): Promise<string | null
     const privateKey = await importPrivateKey(account.private_key);
     assertion = await signJwt(claims, privateKey, account.private_key_id);
   } catch {
+    logFailure('jwt-sign-failed');
     return null;
   }
 
@@ -118,13 +150,20 @@ async function getAccessToken(account: ServiceAccountKey): Promise<string | null
       signal: ctrl.signal,
     });
   } catch {
+    logFailure('token-fetch-failed');
     return null;
   } finally {
     clearTimeout(timer);
   }
-  if (!resp.ok) return null;
+  if (!resp.ok) {
+    logFailure(`token-http-${resp.status}`, await googleErrorCode(resp));
+    return null;
+  }
   const json = (await resp.json()) as { access_token?: string; expires_in?: number };
-  if (!json.access_token) return null;
+  if (!json.access_token) {
+    logFailure('token-no-access-token');
+    return null;
+  }
   const expiresIn = typeof json.expires_in === 'number' ? json.expires_in : TOKEN_TTL_SEC;
   TOKEN_CACHE.set(cacheKey, {
     token: json.access_token,
@@ -165,7 +204,10 @@ export async function fetchMapsQuotaFromCloudMonitoring(
   const account = parseServiceAccount(env.GOOGLE_CLOUD_SA_KEY);
   if (!account) return null;
   const projectId = env.GOOGLE_CLOUD_PROJECT_ID ?? account.project_id;
-  if (!projectId) return null;
+  if (!projectId) {
+    logFailure('project-id-missing');
+    return null;
+  }
 
   const accessToken = await getAccessToken(account);
   if (!accessToken) return null;
@@ -210,11 +252,13 @@ export async function fetchMapsQuotaFromCloudMonitoring(
       signal: ctrl.signal,
     });
   } catch {
+    logFailure('monitoring-fetch-failed');
     return null;
   } finally {
     clearTimeout(timer);
   }
   if (!resp.ok) {
+    logFailure(`monitoring-http-${resp.status}`, await googleErrorCode(resp.clone()));
     // 401 → token expired between cache check and call → invalidate + caller can retry
     if (resp.status === 401) {
       const cacheKey = `${account.client_email}:${account.private_key_id}`;

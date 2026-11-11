@@ -10,6 +10,7 @@ import { DEFAULT_SSE_TIMINGS, registerRequestEventsRoutes, type SseTimings } fro
 import { registerOpenApiDocs } from './openapi-docs';
 import { registerLegacyRoutes } from './routes';
 import { registerLoginRoute } from './routes/login';
+import { registerPasskeyLoginRoutes } from './routes/passkey-login';
 import { registerTokenRoute } from './routes/token';
 
 const PERMISSION_CODES: ReadonlySet<string> = new Set(['PERM_DENIED', 'PERM_ADMIN_ONLY', 'PERM_NOT_OWNER']);
@@ -67,6 +68,7 @@ export function createApp(opts: { sse?: Partial<SseTimings> } = {}) {
 
   registerRequestEventsRoutes(app, { ...DEFAULT_SSE_TIMINGS, ...opts.sse });
   registerLoginRoute(app);
+  registerPasskeyLoginRoutes(app);
   registerLegacyRoutes(app);
   registerTokenRoute(app);
 

@@ -5,7 +5,7 @@
 import type { OpenAPIHono } from '@hono/zod-openapi';
 import { z } from '@hono/zod-openapi';
 import type { AppEnv } from './env';
-import { LoginRequest, LoginResponse, NestedError, OAuthError, SseTicketResponse, TokenRequest, TokenResponse } from './schemas/oauth';
+import { LoginRequest, LoginResponse, NestedError, OAuthError, PasskeyLoginOptions, PasskeyLoginRequest, SseTicketResponse, TokenRequest, TokenResponse } from './schemas/oauth';
 
 const json = <T extends z.ZodTypeAny>(schema: T) => ({ 'application/json': { schema } });
 const idParam = z.object({ id: z.string().regex(/^\d+$/).openapi({ param: { name: 'id', in: 'path' }, example: '123' }) });
@@ -33,6 +33,25 @@ export function registerOpenApiDocs(app: OpenAPIHono<AppEnv>): void {
       400: { description: 'LOGIN_INVALID_INPUT（含非第一方 client）', content: json(NestedError) },
       401: { description: 'LOGIN_INVALID（帳號不存在、密碼錯、停權一律相同）', content: json(NestedError) },
       429: { description: 'LOGIN_RATE_LIMITED：IP × 帳號錯 10 次鎖 10 分鐘、再錯 10 次鎖 30 分鐘（附 Retry-After）', content: json(NestedError) },
+    },
+  });
+
+  reg.registerPath({
+    method: 'post', path: '/api/oauth/passkey/options', summary: 'passkey 登入：取得挑戰（未登入可呼叫）',
+    responses: {
+      200: { description: 'WebAuthn 取得選項（navigator.credentials.get 的 publicKey）；挑戰 5 分鐘內有效、只能用一次', content: json(PasskeyLoginOptions) },
+      429: { description: 'LOGIN_RATE_LIMITED（附 Retry-After）', content: json(NestedError) },
+    },
+  });
+
+  reg.registerPath({
+    method: 'post', path: '/api/oauth/passkey/login', summary: 'passkey 登入，換 authorization code（與密碼登入同一條簽發路徑，之後到 token endpoint 兌換，含 DPoP 綁定）',
+    request: { body: { required: true, content: json(PasskeyLoginRequest) } },
+    responses: {
+      200: { description: '回 code；之後到 token endpoint 以 code_verifier 兌換', content: json(LoginResponse) },
+      400: { description: 'LOGIN_INVALID_INPUT（含非第一方 client）', content: json(NestedError) },
+      401: { description: 'PASSKEY_LOGIN_INVALID：挑戰無效／已用／逾期、未知或他人憑證、簽名錯、缺使用者驗證、網域不符、簽名計數倒退、停權一律相同（不洩漏帳號是否有 passkey）', content: json(NestedError) },
+      429: { description: 'LOGIN_RATE_LIMITED：同一 IP 淨失敗過多（附 Retry-After）', content: json(NestedError) },
     },
   });
 

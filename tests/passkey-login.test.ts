@@ -241,6 +241,14 @@ describe('簽名計數（偵測複製的憑證）', () => {
     const a = await seeded(5);
     await expectRejected(await loginWith(a, { signCount: 0 }));
   });
+  it('併發：同一個憑證、同一個計數同時登入兩次，只有一個成功（條件式更新）', async () => {
+    const a = await seeded();
+    const [c1, c2] = [await getChallenge(), await getChallenge()];
+    const [x, y] = [await assertion(a, c1, { signCount: 1 }), await assertion(a, c2, { signCount: 1 })];
+    const res = await Promise.all([login(x), login(y)]);
+    expect(res.map((r) => r.status).sort()).toEqual([200, 401]);
+    expect(codeRows()).toHaveLength(1);
+  });
   it('同一個 assertion 重送（挑戰已用掉）也不會成功', async () => {
     const a = await seeded();
     const ch = await getChallenge();

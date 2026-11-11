@@ -12,6 +12,7 @@
 import type { OpenAPIHono } from '@hono/zod-openapi';
 import type { AppEnv } from '../env';
 import { registerAccountRoutes } from './groups/account';
+import { registerAccountPasskeyRoutes } from './groups/account-passkeys';
 import { registerDaysEntriesRoutes } from './groups/days-entries';
 import { registerNotesRoutes } from './groups/notes';
 import { registerOauthMiscRoutes } from './groups/oauth-misc';
@@ -22,6 +23,7 @@ import { registerTripsCoreRoutes } from './groups/trips-core';
 
 export function registerLegacyRoutes(app: OpenAPIHono<AppEnv>): void {
   registerAccountRoutes(app);
+  registerAccountPasskeyRoutes(app);
   registerDaysEntriesRoutes(app);
   registerNotesRoutes(app);
   registerOauthMiscRoutes(app);

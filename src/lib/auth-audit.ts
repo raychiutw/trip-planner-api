@@ -58,6 +58,7 @@ export type AuthEventType =
   | 'password_reset_request'
   | 'password_reset_complete'
   | 'password_change'
+  | 'passkey_register'
   | 'oauth_authorize'
   | 'oauth_consent'
   | 'token_issue'

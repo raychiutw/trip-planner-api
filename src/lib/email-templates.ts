@@ -12,6 +12,7 @@
  *   - emailVerification(verifyUrl, displayName?) — 註冊後驗 email
  *   - passwordReset(resetUrl, displayName?) — 忘記密碼重設
  *   - passwordChangedConfirm(displayName?) — 密碼已更改通知
+ *   - passkeyAddedNotice(displayName?, passkeyName) — 新增 passkey 通知
  *
  * 不放 user-controlled HTML 進 template — 全部 user input (displayName) 過
  * `escapeHtml` 防 XSS。連結 URL 由 caller 組好（已 encodeURIComponent token）。
@@ -180,5 +181,24 @@ export function passwordChangedConfirm(displayName?: string | null): EmailTempla
 </div>
 `),
     text: `密碼已更改${displayName ? `，${displayName}` : ''}\n\n您的 Tripline 帳號密碼已成功更改。為了安全，您所有裝置已自動登出。\n\n如果不是您本人操作：\n· 立即重設密碼\n· 檢查最近的登入裝置\n· 有疑問請聯絡我們\n\n— Tripline`,
+  };
+}
+
+export function passkeyAddedNotice(displayName: string | null | undefined, passkeyName: string): EmailTemplate {
+  return {
+    subject: 'Tripline 新增了一組 passkey',
+    html: shellHtml(`
+<div style="background:#fff; border:1px solid #EADFCF; border-radius:14px; padding:32px;">
+  <h2 style="margin:0 0 16px; font-size:22px; font-weight:800;">新增了一組 passkey${displayName ? `，${escapeHtml(displayName)}` : ''}</h2>
+  <p style="margin:0 0 16px; font-size:15px;">您的 Tripline 帳號新增了一組 passkey「${escapeHtml(passkeyName)}」，之後可以用它免輸入密碼登入。</p>
+  <p style="margin:0 0 8px; font-size:14px; color:${MUTED_COLOR};">如果不是您本人操作：</p>
+  <ul style="margin:0; padding-left:20px; font-size:13px; color:${MUTED_COLOR};">
+    <li>立即到帳號設定移除這組 passkey 並變更密碼</li>
+    <li>檢查最近的登入裝置（設定 → 登入裝置）</li>
+    <li>有疑問請聯絡我們</li>
+  </ul>
+</div>
+`),
+    text: `新增了一組 passkey${displayName ? `，${displayName}` : ''}\n\n您的 Tripline 帳號新增了一組 passkey「${passkeyName}」，之後可以用它免輸入密碼登入。\n\n如果不是您本人操作：\n· 立即移除這組 passkey 並變更密碼\n· 檢查最近的登入裝置\n· 有疑問請聯絡我們\n\n— Tripline`,
   };
 }

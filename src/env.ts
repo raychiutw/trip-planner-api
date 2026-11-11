@@ -44,6 +44,8 @@ export interface Env {
   SESSION_IP_HASH_SECRET?: string;
   /** passkey 的 RP ID；缺省 trip-planner-dby.pages.dev（ADR-0016）。 */
   PASSKEY_RP_ID?: string;
+  /** passkey 額外接受的來源（逗號分隔，預設空）；例如 Android 原生 App 的 `android:apk-key-hash:…`。註冊與登入共用。 */
+  PASSKEY_EXTRA_ORIGINS?: string;
   /** 寄信走 mac mini mailer：URL 與 Bearer token（src/lib/email.ts 的 EmailEnv）。 */
   TRIPLINE_API_URL?: string;
   TRIPLINE_API_SECRET?: string;

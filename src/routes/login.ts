@@ -18,19 +18,15 @@ import type { Hono } from 'hono';
 import type { AppEnv } from '../env';
 import { AppError, buildRateLimitResponse, errorResponse } from '../errors';
 import { recordAuthEvent } from '../lib/auth-audit';
-import { generateOpaqueToken } from '../lib/crypto';
 import { normalizeEmail } from '../lib/email-utils';
 import { sha256Base64Url } from '../lib/crypto';
-import { D1Adapter } from '../lib/oauth-d1-adapter';
-import { parseAllowedScopes, readJsonObject } from '../lib/oauth-request';
+import { issueLoginCode, LOGIN_CODE_TTL_SEC, parseGrantShape, resolveFirstPartyGrant } from '../lib/first-party-login';
+import { readJsonObject } from '../lib/oauth-request';
 import { verifyPassword } from '../lib/password';
 import { recordSecurityEvent } from '../lib/security-events';
 import { bumpRateLimit, bumpTieredLock, clientIp, RATE_LIMITS, refundRateLimit, resetRateLimit } from '../lib/rate-limit';
 
 const MAX_PASSWORD_LENGTH = 1024;
-const LOGIN_CODE_TTL_SEC = 60;
-const DEFAULT_SCOPES = ['openid', 'profile', 'email'];
-const B64URL_43 = /^[A-Za-z0-9_-]{43}$/;
 
 // 帳號不存在時拿來比對的假雜湊（PBKDF2 100k 次，耗時與真的相同）
 const TIMING_PROBE_HASH = 'pbkdf2$100000$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
@@ -39,7 +35,6 @@ const invalidInput = () => errorResponse(new AppError('LOGIN_INVALID_INPUT'));
 const rateLimited = (retryAfter: number) =>
   buildRateLimitResponse(retryAfter, { error: { code: 'LOGIN_RATE_LIMITED', message: '登入嘗試過多，請稍後再試' } });
 
-interface ClientRow { client_type: string; status: string; first_party: number; allowed_scopes: string }
 interface IdentityRow { user_id: string; password_hash: string | null; status: string }
 
 export function registerLoginRoute(app: Hono<AppEnv>): void {
@@ -50,23 +45,17 @@ export function registerLoginRoute(app: Hono<AppEnv>): void {
     // 1. 輸入形狀（便宜的檢查先做；任何不合都在碰密碼之前結束）
     const body = await readJsonObject(request);
     if (!body) return invalidInput();
-    const { email: rawEmail, password, client_id: clientId, code_challenge: challenge, code_challenge_method: method, dpop_jkt: dpopJkt, scope } = body;
+    const { email: rawEmail, password, client_id: clientId } = body;
     if (typeof rawEmail !== 'string' || typeof password !== 'string' || typeof clientId !== 'string') return invalidInput();
     if (!password || password.length > MAX_PASSWORD_LENGTH) return invalidInput();
     const email = normalizeEmail(rawEmail);
     if (!email || !clientId) return invalidInput();
-    if (method !== 'S256' || typeof challenge !== 'string' || !B64URL_43.test(challenge)) return invalidInput();
-    if (dpopJkt !== undefined && (typeof dpopJkt !== 'string' || !B64URL_43.test(dpopJkt))) return invalidInput();
-    if (scope !== undefined && typeof scope !== 'string') return invalidInput();
+    const shape = parseGrantShape(body);
+    if (!shape) return invalidInput();
 
     // 3. client 必須是啟用中的第一方 public client；其他一律同一個 400，不洩漏原因，也不計失敗次數
-    const client = await DB.prepare('SELECT client_type, status, first_party, allowed_scopes FROM client_apps WHERE client_id = ?')
-      .bind(clientId).first<ClientRow>();
-    if (!client || client.status !== 'active' || client.first_party !== 1 || client.client_type !== 'public') return invalidInput();
-
-    const allowed = parseAllowedScopes(client.allowed_scopes);
-    const requested = scope === undefined ? DEFAULT_SCOPES.filter((s) => allowed.includes(s)) : scope.split(/\s+/).filter(Boolean);
-    if (requested.length === 0 || requested.some((s) => !allowed.includes(s))) return invalidInput();
+    const grant = await resolveFirstPartyGrant(DB, clientId, shape);
+    if (!grant) return invalidInput();
 
     // 4. 限流：以「IP × 帳號」為單位、階梯式鎖定（錯 10 次鎖 10 分鐘，鎖完再錯 10 次鎖 30 分鐘）；
     //    攻擊者只會鎖到自己的 IP 對該帳號，本人從別的 IP 不受影響。
@@ -120,16 +109,7 @@ export function registerLoginRoute(app: Hono<AppEnv>): void {
     } catch { /* 登入仍成功 */ }
 
     const userId = identity!.user_id;
-    const code = generateOpaqueToken(32);
-    await new D1Adapter(DB, 'AuthorizationCode').upsert(code, {
-      client_id: clientId,
-      user_id: userId,
-      redirect_uri: null, // 第一方直接換 code，沒有跳轉；兌換時也不可帶 redirect_uri
-      scopes: requested,
-      code_challenge: challenge,
-      code_challenge_method: 'S256',
-      ...(dpopJkt ? { dpop_jkt: dpopJkt } : {}),
-    }, LOGIN_CODE_TTL_SEC);
+    const code = await issueLoginCode(DB, userId, grant);
 
     await recordAuthEvent(DB, request, { eventType: 'login', outcome: 'success', userId, clientId, metadata: { email } }, c.env);
     return c.json({ code, expires_in: LOGIN_CODE_TTL_SEC }, 200, { 'Cache-Control': 'no-store' });

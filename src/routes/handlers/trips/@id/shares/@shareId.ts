@@ -15,15 +15,18 @@ import { requireAuth, requireTripWrite } from '../../../../../lib/permissions';
 import { AppError } from '../../../../../errors';
 import { json } from '../../../../../lib/utils';
 import { generateShareToken, hashToken, sanitizeVisibleSections, validateExpiresAt } from '../../../../../lib/share';
+import { enforceStepUp } from '../../../../../lib/step-up';
 import type { Env } from '../../../../../env';
 
 export const onRequestPatch: PagesFunction<Env> = async (context) => {
   const { id, shareId } = context.params as { id: string; shareId: string };
   const db = context.env.DB;
-  await requireTripWrite(db, requireAuth(context), id);
+  const auth = requireAuth(context);
+  await requireTripWrite(db, auth, id);
   const body = (await context.request.json().catch(() => ({}))) as Record<string, unknown>;
 
   if (body.action === 'revoke') {
+    await enforceStepUp(context, auth);
     const res = await db
       .prepare("UPDATE trip_shares SET revoked_at = datetime('now') WHERE id = ? AND trip_id = ? AND revoked_at IS NULL")
       .bind(shareId, id)
@@ -93,7 +96,9 @@ export const onRequestPatch: PagesFunction<Env> = async (context) => {
 export const onRequestDelete: PagesFunction<Env> = async (context) => {
   const { id, shareId } = context.params as { id: string; shareId: string };
   const db = context.env.DB;
-  await requireTripWrite(db, requireAuth(context), id);
+  const auth = requireAuth(context);
+  await requireTripWrite(db, auth, id);
+  await enforceStepUp(context, auth);
 
   const res = await db
     .prepare('DELETE FROM trip_shares WHERE id = ? AND trip_id = ?')

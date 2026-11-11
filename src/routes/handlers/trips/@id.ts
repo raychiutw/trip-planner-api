@@ -2,6 +2,7 @@ import { logAudit, computeDiff } from '../../../lib/audit';
 import { assertNotTripRestricted, hasWritePermission, requireAuth, requireTripReadAccess } from '../../../lib/permissions';
 import { AppError } from '../../../errors';
 import { json, parseJsonBody, buildUpdateClause, getAuth, publicIfAnonymous } from '../../../lib/utils';
+import { enforceStepUp } from '../../../lib/step-up';
 import type { Env } from '../../../env';
 
 // Migration 0045: dropped og_description/self_drive/food_prefs/auto_scroll/footer/is_default.
@@ -88,6 +89,7 @@ export const onRequestDelete: PagesFunction<Env> = async (context) => {
   if (!auth.userId || ownerUid !== auth.userId) {
     throw new AppError('PERM_DENIED', '僅行程擁有者可刪除');
   }
+  await enforceStepUp(context, auth);
 
   await db.prepare('DELETE FROM trips WHERE id = ?').bind(id).run();
 

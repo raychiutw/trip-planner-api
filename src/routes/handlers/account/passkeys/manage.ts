@@ -16,6 +16,7 @@ import { alertAdminTelegram } from '../../../../lib/alert';
 import { maskEmail } from '../../../../lib/pii';
 import { passkeyRevokedNotice } from '../../../../lib/email-templates';
 import { parseJsonBody, rawJson } from '../../../../lib/utils';
+import { enforceStepUp } from '../../../../lib/step-up';
 import type { Env } from '../../../../env';
 
 const NAME_MAX = 50;
@@ -62,6 +63,7 @@ export const onRequestPatch: PagesFunction<Env> = async (context) => {
 
 export const onRequestDelete: PagesFunction<Env> = async (context) => {
   const user = await requireAccountUser(context);
+  await enforceStepUp(context, user.auth);
   const { env, request } = context;
   const id = credentialId(context);
 

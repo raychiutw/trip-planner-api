@@ -239,3 +239,16 @@ export async function verifyAssertion(
   if (!(await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, key, sig, signed))) failAssert('bad_signature');
   return { signCount: new DataView(authData.buffer, authData.byteOffset + 33, 4).getUint32(0) };
 }
+
+export type SignCountResult = 'ok' | 'regression' | 'race';
+
+/**
+ * 簽名計數檢查與更新（登入與 step-up 共用）：兩邊都是 0（同步型 passkey 不回報計數）可過；否則必須嚴格遞增，不然視為憑證被複製。
+ * 更新是條件式的（WHERE sign_count = 舊值）：同一個憑證併發驗證時只有一個贏家。
+ */
+export async function advanceSignCount(db: D1Database, credentialId: string, stored: number, received: number): Promise<SignCountResult> {
+  if ((stored > 0 || received > 0) && received <= stored) return 'regression';
+  const upd = await db.prepare("UPDATE passkey_credentials SET sign_count = ?, last_used_at = datetime('now') WHERE id = ? AND sign_count = ?")
+    .bind(received, credentialId, stored).run();
+  return (upd.meta?.changes ?? 0) === 1 ? 'ok' : 'race';
+}

@@ -60,6 +60,7 @@ export type AuthEventType =
   | 'password_change'
   | 'passkey_register'
   | 'passkey_revoke'
+  | 'reauth'
   | 'oauth_authorize'
   | 'oauth_consent'
   | 'token_issue'

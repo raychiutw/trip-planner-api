@@ -327,6 +327,37 @@ describe('POST /api/account/reauth/passkey', () => {
     expect(await proofRows(u.userId)).toHaveLength(0);
   });
 
+  // 各欄位單獨檢查：user_id、grant_id、purpose 各自都必須對上（不能只靠其中一個擋住）
+  async function forgedChallenge(over: Record<string, unknown>) {
+    const ch = b64u(crypto.getRandomValues(new Uint8Array(32)));
+    await new D1Adapter(db, 'PasskeyChallenge').upsert(ch, { purpose: 'passkey-stepup', ...over }, 300);
+    return ch;
+  }
+  it('挑戰的 purpose 錯（其餘欄位都對）被拒', async () => {
+    const u = await seed();
+    const a = await addKey(u.userId);
+    const ch = await forgedChallenge({ user_id: u.userId, grant_id: u.grantId, purpose: 'passkey-register' });
+    expect((await viaPasskey(u.bearer, await assertion(a, ch))).status).toBe(403);
+  });
+  it('挑戰的 user_id 錯（grant 與 purpose 都對）被拒', async () => {
+    const u = await seed();
+    const a = await addKey(u.userId);
+    const ch = await forgedChallenge({ user_id: (await seed()).userId, grant_id: u.grantId });
+    expect((await viaPasskey(u.bearer, await assertion(a, ch))).status).toBe(403);
+  });
+  it('挑戰的 grant_id 錯（user 與 purpose 都對）被拒', async () => {
+    const u = await seed();
+    const a = await addKey(u.userId);
+    const ch = await forgedChallenge({ user_id: u.userId, grant_id: 'someone-elses-grant' });
+    expect((await viaPasskey(u.bearer, await assertion(a, ch))).status).toBe(403);
+  });
+  it('以上欄位全對的挑戰是可用的（對照組，確認上面幾個測試真的是因為單一欄位而被拒）', async () => {
+    const u = await seed();
+    const a = await addKey(u.userId);
+    const ch = await forgedChallenge({ user_id: u.userId, grant_id: u.grantId });
+    expect((await viaPasskey(u.bearer, await assertion(a, ch))).status).toBe(200);
+  });
+
   it('缺欄位或 body 不合法：403 REAUTH_INVALID，不是 500', async () => {
     const u = await seed();
     expect((await viaPasskey(u.bearer, { id: 'x' })).status).toBe(403);
@@ -473,6 +504,20 @@ describe('verifyStepUpProof（共用驗證函式）', () => {
     const u = await seed({ password: PASSWORD });
     const proof = await issue(u);
     expect(await verifyStepUpProof(withProof(proof), accountUser(u, null))).toBe(false);
+  });
+
+  it('使用者與 session 各自獨立檢查：A 的 session 搭 B 的身分、B 的身分搭沒有 grantId 都 false', async () => {
+    const a = await seed({ password: PASSWORD });
+    const b = await seed({ password: PASSWORD });
+    const proof = await issue(a);
+    expect(await verifyStepUpProof(withProof(proof), accountUser(b, a.grantId))).toBe(false); // grant 對、user 錯
+    expect(await verifyStepUpProof(withProof(proof), accountUser(a, b.grantId))).toBe(false); // user 對、grant 錯
+  });
+
+  it('證明資料列本身缺 grant_id 時，沒有 grantId 的呼叫端也不會因為兩邊都是空而通過', async () => {
+    const u = await seed({ password: PASSWORD });
+    await new D1Adapter(db, 'StepUpProof').upsert('forged-no-grant', { user_id: u.userId }, 300);
+    expect(await verifyStepUpProof(withProof('forged-no-grant'), accountUser(u, null))).toBe(false);
   });
 
   it('只認 StepUpProof：拿 access token、step-up 挑戰當證明都是 false', async () => {

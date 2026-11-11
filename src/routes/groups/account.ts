@@ -11,6 +11,7 @@ import { onRequestDelete as accountConnectedAppsClientIdDelete } from '../handle
 import { onRequestGet as accountIndexGet, onRequestDelete as accountIndexDelete } from '../handlers/account/index';
 import { onRequestGet as accountNotificationsGet, onRequestPatch as accountNotificationsPatch } from '../handlers/account/notifications';
 import { onRequestPost as accountPasswordPost } from '../handlers/account/password';
+import { onRequestPostOptions as accountPasskeyRegisterOptionsPost, onRequestPostVerify as accountPasskeyRegisterVerifyPost } from '../handlers/account/passkeys/register';
 import { onRequestPatch as accountProfilePatch } from '../handlers/account/profile';
 import { onRequestGet as accountSessionsGet, onRequestDelete as accountSessionsDelete } from '../handlers/account/sessions';
 import { onRequestDelete as accountSessionsSidDelete } from '../handlers/account/sessions/@sid';
@@ -132,6 +133,22 @@ export function registerAccountRoutes(app: OpenAPIHono<AppEnv>): void {
         429: err('目前密碼輸錯過多被暫時鎖定，Retry-After 為等待秒數（CHANGE_PASSWORD_RATE_LIMITED）'),
       },
     },
+  });
+  legacyRoute(app, {
+    method: 'post', path: '/api/account/passkeys/register/options', auth: 'required', handler: accountPasskeyRegisterOptionsPost, summary: 'passkey 註冊：取得挑戰與建立選項',
+    docs: { bodyRequired: false, responses: {
+      200: { description: 'WebAuthn 建立選項（navigator.credentials.create 的 publicKey）；挑戰 5 分鐘內有效、只能用一次、綁定本人', schema: S.Account_PasskeyRegisterOptions },
+      401: E401, 403: E403_ACCOUNT,
+    } },
+  });
+  legacyRoute(app, {
+    method: 'post', path: '/api/account/passkeys/register/verify', auth: 'required', handler: accountPasskeyRegisterVerifyPost, summary: 'passkey 註冊：驗證並儲存',
+    docs: { body: S.Account_PasskeyRegisterBody, responses: {
+      201: { description: '已儲存；已寄「新增了一組 passkey」通知信（寄信失敗不影響結果）', schema: S.Account_PasskeyRegistered },
+      400: err('挑戰無效、已使用或逾期（PASSKEY_CHALLENGE_INVALID）；來源網域不符（PASSKEY_ORIGIN_MISMATCH）；未完成使用者驗證（PASSKEY_UV_REQUIRED）；憑證資料無效或演算法不支援（PASSKEY_REGISTRATION_INVALID）；body 不是合法 JSON（DATA_VALIDATION）'),
+      401: E401, 403: E403_ACCOUNT,
+      409: err('這個憑證 ID 已被註冊（PASSKEY_ALREADY_REGISTERED）'),
+    } },
   });
   legacyRoute(app, {
     method: 'get', path: '/api/account/sessions', auth: 'required', handler: accountSessionsGet, summary: '有效連線（OAuth grant）',

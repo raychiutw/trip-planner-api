@@ -108,6 +108,40 @@ export const Account_ChangePasswordBody = z.object({
   new_password: z.string().openapi({ description: '新密碼，至少 8 字元，不可與目前密碼相同' }),
 }).openapi('Account_ChangePasswordBody');
 
+// ───────── passkey 註冊（ADR-0016）─────────
+
+export const Account_PasskeyRegisterOptions = z.object({
+  challenge: z.string().openapi({ description: '一次性挑戰（base64url）；5 分鐘內有效，只能用一次' }),
+  rp: z.object({ id: z.string(), name: z.string() }),
+  user: z.object({ id: z.string().openapi({ description: 'base64url' }), name: z.string(), displayName: z.string() }),
+  pubKeyCredParams: z.array(z.object({ type: z.literal('public-key'), alg: z.number().int() })),
+  timeout: z.number().int(),
+  attestation: z.literal('none'),
+  authenticatorSelection: z.object({ residentKey: z.literal('required'), userVerification: z.literal('required') }),
+  excludeCredentials: z.array(z.object({ type: z.literal('public-key'), id: z.string(), transports: z.array(z.string()).optional() })),
+}).openapi('Account_PasskeyRegisterOptions');
+
+export const Account_PasskeyRegisterBody = z.object({
+  name: z.string().optional().openapi({ description: 'passkey 名稱，最多 50 字；沒給用「Passkey」' }),
+  credential: z.object({
+    id: z.string().openapi({ description: '憑證 ID（base64url）' }),
+    type: z.literal('public-key').optional(),
+    response: z.object({
+      clientDataJSON: z.string().openapi({ description: 'base64url' }),
+      attestationObject: z.string().openapi({ description: 'base64url' }),
+      transports: z.array(z.string()).optional(),
+    }),
+  }),
+}).openapi('Account_PasskeyRegisterBody');
+
+export const Account_PasskeyRegistered = z.object({
+  id: z.string(),
+  name: z.string(),
+  transports: z.array(z.string()),
+  backupEligible: z.boolean().openapi({ description: '是否為可同步的 passkey（authenticatorData 的 BE 旗標）' }),
+  createdAt: z.string().nullable(),
+}).openapi('Account_PasskeyRegistered');
+
 export const Account_DeletePreview = z.object({
   hasPassword: z.boolean().openapi({ description: '有 local 密碼身分 → 刪除時必須帶 password 確認；沒有密碼的帳號目前沒有可用的重新驗證方式，無法刪除（fail-closed）' }),
   reauthProvider: z.null().openapi({ description: '已棄用的相容欄位（Google 重新驗證已移除），恆為 null；舊 client 仍會讀它' }),

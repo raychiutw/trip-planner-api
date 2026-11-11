@@ -42,6 +42,8 @@ export interface Env {
   SESSION_SECRET?: string;
   /** auth_audit_log 的 IP 雜湊用 HMAC key（未設則退回無鹽 SHA-256）。 */
   SESSION_IP_HASH_SECRET?: string;
+  /** passkey 的 RP ID；缺省 trip-planner-dby.pages.dev（ADR-0016）。 */
+  PASSKEY_RP_ID?: string;
   /** 寄信走 mac mini mailer：URL 與 Bearer token（src/lib/email.ts 的 EmailEnv）。 */
   TRIPLINE_API_URL?: string;
   TRIPLINE_API_SECRET?: string;

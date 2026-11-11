@@ -9,7 +9,7 @@
  * shortcut: 證明不會因登出或換密碼而主動撤銷（最長 5 分鐘自然失效）；需要時在撤銷 grant 處一併 destroy。
  */
 import { AppError } from '../errors';
-import type { Env } from '../env';
+import type { AuthData, Env } from '../env';
 import type { AccountUser } from './account-user';
 import { generateOpaqueToken } from './crypto';
 import { D1Adapter } from './oauth-d1-adapter';
@@ -45,4 +45,14 @@ export async function verifyStepUpProof(context: { request: Request; env: Env },
 /** 敏感端點用：沒有有效證明就丟 REAUTH_REQUIRED（403）。 */
 export async function requireStepUpProof(context: { request: Request; env: Env }, user: AccountUser): Promise<void> {
   if (!(await verifyStepUpProof(context, user))) throw new AppError('REAUTH_REQUIRED');
+}
+
+/**
+ * 五個敏感操作的共用入口（api#82）：STEP_UP_ENFORCE=1 時，「使用者本人的互動式登入」必須帶有效證明。
+ * 服務 token（無 user）與 trip-scoped 受限 token（agent 代使用者操作）不是互動式登入，一律放行，維持原行為。
+ */
+export async function enforceStepUp(context: { request: Request; env: Env }, auth: AuthData): Promise<void> {
+  if (context.env.STEP_UP_ENFORCE !== '1') return;
+  if (auth.isServiceToken || !auth.userId || auth.restrictTrip !== undefined) return;
+  await requireStepUpProof(context, { uid: auth.userId, email: auth.email, auth });
 }

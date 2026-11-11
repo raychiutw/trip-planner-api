@@ -21,6 +21,7 @@ import { maskEmail } from '../../../lib/pii';
 import { passwordChangedConfirm } from '../../../lib/email-templates';
 import { parseJsonBody, rawJson } from '../../../lib/utils';
 import { currentGrantId, listUserGrants } from './sessions';
+import { enforceStepUp } from '../../../lib/step-up';
 import type { Env } from '../../../env';
 
 interface Body {
@@ -30,6 +31,7 @@ interface Body {
 
 export const onRequestPost: PagesFunction<Env> = async (context) => {
   const user = await requireAccountUser(context);
+  await enforceStepUp(context, user.auth);
   const { env, request } = context;
   const audit = (outcome: 'success' | 'failure', failureReason?: string, metadata?: Record<string, unknown>) =>
     recordAuthEvent(env.DB, request, { eventType: 'password_change', outcome, userId: user.uid, failureReason, metadata }, env);

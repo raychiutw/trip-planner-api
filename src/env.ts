@@ -42,6 +42,11 @@ export interface Env {
   SESSION_SECRET?: string;
   /** auth_audit_log 的 IP 雜湊用 HMAC key（未設則退回無鹽 SHA-256）。 */
   SESSION_IP_HASH_SECRET?: string;
+  /**
+   * 敏感操作（變更密碼、刪行程、撤銷分享、撤銷 passkey、刪帳號）是否強制要求重新驗證證明（api#82）。
+   * 只有字串 "1" 才強制；未設或其他值 = 不檢查（預設關閉）。web 與 App 的重新驗證畫面上線後才可開。
+   */
+  STEP_UP_ENFORCE?: string;
   /** passkey 的 RP ID；缺省 trip-planner-dby.pages.dev（ADR-0016）。 */
   PASSKEY_RP_ID?: string;
   /** passkey 額外接受的來源（逗號分隔，預設空）；例如 Android 原生 App 的 `android:apk-key-hash:…`。註冊與登入共用。 */

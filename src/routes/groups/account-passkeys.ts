@@ -29,7 +29,7 @@ export function registerAccountPasskeyRoutes(app: OpenAPIHono<AppEnv>): void {
     method: 'delete', path: '/api/account/passkeys/:id', auth: 'required', handler: onRequestDelete, summary: '撤銷 passkey',
     docs: { responses: {
       200: { description: '憑證資料已刪除（之後不能再用來登入）；已寄「移除了一組 passkey」通知信（失敗不影響結果）；不影響任何 session／token', schema: P.Account_PasskeyRevoked },
-      401: E401, 403: E403, 404: E404,
+      401: E401, 403: err('token 屬於非第一方的 client，或是 trip 範圍的受限 token（PERM_DENIED）；或 REAUTH_REQUIRED：伺服器開啟 STEP_UP_ENFORCE 時，使用者本人的登入沒帶有效重新驗證證明（標頭 X-Step-Up-Proof；到 POST /api/account/reauth/* 換證明後重試）'), 404: E404,
     } },
   });
   const E403_REAUTH = err('驗證失敗（挑戰無效／已用／逾期、他人或不存在的憑證、簽名錯、缺使用者驗證、網域不符、簽名計數倒退、密碼不正確或沒帶）一律同一個回應（code: REAUTH_INVALID，刻意不用 401，避免 client 當成登入過期）；或非第一方 client／受限 token（PERM_DENIED）');

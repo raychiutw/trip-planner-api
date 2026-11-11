@@ -25,6 +25,7 @@ import { AppError } from '../../../errors';
 import { rawJson } from '../../../lib/utils';
 import { verifyPassword } from '../../../lib/password';
 import { eraseUserAccount } from '../../../lib/erasure';
+import { enforceStepUp } from '../../../lib/step-up';
 import type { Env } from '../../../env';
 
 interface DeleteAccountBody {
@@ -86,6 +87,7 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
 
 export const onRequestDelete: PagesFunction<Env> = async (context) => {
   const actor = await requireAccountUser(context);
+  await enforceStepUp(context, actor.auth);
   const userId = actor.uid;
 
   let body: DeleteAccountBody = {};

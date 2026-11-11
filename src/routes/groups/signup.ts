@@ -29,6 +29,11 @@ export function registerSignupRoutes(app: OpenAPIHono<AppEnv>): void {
     401: { description: '未帶有效 bearer token', schema: ApiError },
     403: { description: '沒有此行程的寫入權限（viewer 也不行；PERM_DENIED）', schema: ApiError },
   };
+  /** 撤銷分享（DELETE，以及 PATCH action=revoke）的 403：另含重新驗證證明（api#82）。 */
+  const revokeErrors = {
+    ...authErrors,
+    403: { description: '沒有此行程的寫入權限（viewer 也不行；PERM_DENIED）；或 REAUTH_REQUIRED：伺服器開啟 STEP_UP_ENFORCE 時，使用者本人的登入沒帶有效重新驗證證明（標頭 X-Step-Up-Proof；到 POST /api/account/reauth/* 換證明後重試）', schema: ApiError },
+  };
 
   legacyRoute(app, {
     method: 'post', path: '/api/oauth/signup', auth: 'none', handler: signupPost, summary: '本地帳號註冊',
@@ -122,7 +127,7 @@ export function registerSignupRoutes(app: OpenAPIHono<AppEnv>): void {
       responses: {
         200: { description: '依 action 回 { ok, revoked } / { ok, token, url } / { ok, updated } 其一', schema: S.Signup_SharePatchResult },
         400: { description: 'DATA_VALIDATION：action 未知，或 update 沒有任何可更新欄位', schema: ApiError },
-        ...authErrors,
+        ...revokeErrors, // 只有 action=revoke 會要求重新驗證證明；rotate／update 不要求
         404: { description: 'DATA_NOT_FOUND：連結不屬於此行程、已撤銷（revoke 重複／rotate／update）或已過期', schema: ApiError },
       },
     },
@@ -132,7 +137,7 @@ export function registerSignupRoutes(app: OpenAPIHono<AppEnv>): void {
     docs: {
       responses: {
         200: { description: '已刪除', schema: S.Signup_ShareDeleted },
-        ...authErrors,
+        ...revokeErrors,
         404: { description: 'DATA_NOT_FOUND', schema: ApiError },
       },
     },

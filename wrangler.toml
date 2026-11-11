@@ -7,6 +7,8 @@ compatibility_flags = ["nodejs_compat"]
 # ENVIRONMENT=preview 是 src/lib/mobile-oauth.ts 的 UAT 契約：只認 tripline-mobile-uat、請求 origin 必須等於 PUBLIC_ORIGIN、
 # callback 必須是 /uat/oauth/callback（與 tripline-mobile 的 production callback 分開，避免 staging 與 production 的 app link 互相搶）。
 # ⚠ 合併後由 deploy.yml 部署到 staging：PUBLIC_ORIGIN 會改變 issuer、授權導向的 web origin（WEB_ORIGIN 未設時）與信件連結的 origin。
+# STEP_UP_ENFORCE（api#82，預設不設 = 關閉）：設為 "1" 才強制「變更密碼、刪行程、撤銷分享、撤銷 passkey、刪帳號」要帶重新驗證證明（X-Step-Up-Proof）。
+# 開啟前提：web 與 App 的重新驗證畫面都已上線，否則這五個操作會全部 403 REAUTH_REQUIRED。以 wrangler secret／dashboard 變數設定，不寫在此檔。
 [vars]
 ENVIRONMENT = "preview"
 PUBLIC_ORIGIN = "https://trip-planner-api.lean-lean.workers.dev"

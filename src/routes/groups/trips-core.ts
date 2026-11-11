@@ -89,7 +89,7 @@ export function registerTripsCoreRoutes(app: OpenAPIHono<AppEnv>): void {
     docs: { responses: {
       200: { description: '已刪除（相關資料以 FK cascade 清除）', schema: S.Trips_Ok },
       401: E.unauthorized,
-      403: { description: '僅行程擁有者可刪除；受限 token 不可刪除', schema: ApiError },
+      403: { description: '僅行程擁有者可刪除；受限 token 不可刪除；或 REAUTH_REQUIRED：伺服器開啟 STEP_UP_ENFORCE 時，使用者本人的登入沒帶有效重新驗證證明（標頭 X-Step-Up-Proof；到 POST /api/account/reauth/* 換證明後重試）', schema: ApiError },
       404: E.notFound,
     } },
   });

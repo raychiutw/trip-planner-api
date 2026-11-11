@@ -95,7 +95,7 @@ export function registerAccountRoutes(app: OpenAPIHono<AppEnv>): void {
         200: { description: '帳號與所擁有的行程（含共編者的）已抹除；所有 token／授權一併清除', schema: S.Account_DeleteResult },
         400: err('有密碼的帳號沒給 password（code: ACCOUNT_DELETE_CONFIRM_REQUIRED）'),
         401: err('未登入（AUTH_REQUIRED），或密碼錯誤且資料未動（ACCOUNT_DELETE_PASSWORD_INVALID）'),
-        403: err('token 屬於非第一方 client 或受限 token（PERM_DENIED）；或帳號沒有密碼、沒有可用的重新驗證方式（ACCOUNT_DELETE_REAUTH_REQUIRED，fail-closed，資料未動）'),
+        403: err('token 屬於非第一方 client 或受限 token（PERM_DENIED）；或帳號沒有密碼、沒有可用的重新驗證方式（ACCOUNT_DELETE_REAUTH_REQUIRED，fail-closed，資料未動）；或 REAUTH_REQUIRED：伺服器開啟 STEP_UP_ENFORCE 時，使用者本人的登入沒帶有效重新驗證證明（標頭 X-Step-Up-Proof；到 POST /api/account/reauth/* 換證明後重試）'),
       },
     },
   });
@@ -128,7 +128,7 @@ export function registerAccountRoutes(app: OpenAPIHono<AppEnv>): void {
         200: { description: '密碼已更新；其他裝置的登入已全部失效，目前這個登入保留；已寄通知信（寄信失敗不影響結果）', schema: S.Account_Ok },
         400: err('新密碼少於 8 字元（CHANGE_PASSWORD_TOO_SHORT），或與目前密碼相同（CHANGE_PASSWORD_SAME）'),
         401: E401,
-        403: err('目前密碼不正確或沒帶（CHANGE_PASSWORD_CURRENT_INVALID，刻意不用 401，避免 client 當成登入過期）；或非第一方 client／受限 token（PERM_DENIED）'),
+        403: err('目前密碼不正確或沒帶（CHANGE_PASSWORD_CURRENT_INVALID，刻意不用 401，避免 client 當成登入過期）；或非第一方 client／受限 token（PERM_DENIED）；或 REAUTH_REQUIRED：伺服器開啟 STEP_UP_ENFORCE 時，使用者本人的登入沒帶有效重新驗證證明（標頭 X-Step-Up-Proof；到 POST /api/account/reauth/* 換證明後重試）'),
         409: err('此帳號沒有 local 密碼（沒有設定密碼）（CHANGE_PASSWORD_NO_PASSWORD）'),
         429: err('目前密碼輸錯過多被暫時鎖定，Retry-After 為等待秒數（CHANGE_PASSWORD_RATE_LIMITED）'),
       },

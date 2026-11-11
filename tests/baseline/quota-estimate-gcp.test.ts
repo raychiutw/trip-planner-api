@@ -34,6 +34,7 @@ let saKeyJson: string;
 interface Call { url: string; method: string; headers: Headers; body: string | null }
 const calls: Call[] = [];
 let monitoring: () => Response = () => new Response('{}', { status: 500 });
+let oauth: (() => Response) | null = null;
 
 function stubGcp() {
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -49,6 +50,7 @@ function stubGcp() {
       body: typeof init?.body === 'string' ? init.body : null,
     });
     if (host === 'oauth2.googleapis.com') {
+      if (oauth) return oauth();
       return new Response(JSON.stringify({ access_token: 'gcp-access-token', expires_in: 3600 }), {
         status: 200, headers: { 'Content-Type': 'application/json' },
       });
@@ -102,6 +104,7 @@ afterAll(async () => {
 beforeEach(() => {
   calls.length = 0;
   monitoring = () => new Response('{}', { status: 500 });
+  oauth = null;
   _resetGcpTokenCacheForTest();
   stubGcp();
 });
@@ -220,5 +223,61 @@ describe('quota-estimate endpoint — GCP-or-error (no synthetic fallback)', () 
     const res = await configured().get('/api/admin/quota-estimate');
     expect(res.status).toBe(401);
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('失敗原因記錄（#76：502 之前完全看不出是哪一步失敗）', () => {
+  const warnings = (spy: ReturnType<typeof vi.spyOn>) =>
+    spy.mock.calls.map((a: unknown[]) => a.map(String).join(' ')).filter((l: string) => l.includes('[gcp-monitoring]'));
+
+  it('SA 金鑰不是合法 JSON → 記 sa-key-not-json，且不含金鑰內容', async () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = await getQuota(apiWith({ GOOGLE_CLOUD_SA_KEY: '{', GOOGLE_CLOUD_PROJECT_ID: 'proj-t5a' }));
+    expect(res.status).toBe(502);
+    expect(warnings(spy).join('\n')).toContain('stage=sa-key-not-json');
+    spy.mockRestore();
+  });
+
+  it('缺 SA 金鑰 → 記 sa-key-missing', async () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await getQuota(apiWith({}));
+    expect(warnings(spy).join('\n')).toContain('stage=sa-key-missing');
+    spy.mockRestore();
+  });
+
+  it('OAuth token 端點回 400 invalid_grant → 記 token-http-400 與 Google 的錯誤碼', async () => {
+    oauth = () => new Response(JSON.stringify({ error: 'invalid_grant', error_description: 'secret-detail' }), { status: 400 });
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = await getQuota(configured());
+    expect(res.status).toBe(502);
+    const log = warnings(spy).join('\n');
+    expect(log).toContain('stage=token-http-400');
+    expect(log).toContain('invalid_grant');
+    expect(log).not.toContain('secret-detail');
+    spy.mockRestore();
+  });
+
+  it('Google 回的錯誤碼格式不符（含空白、符號）→ 不寫進 log，只留 stage', async () => {
+    monitoring = () => new Response(JSON.stringify({ error: { status: 'bad code & token=abc' } }), { status: 403 });
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await getQuota(configured());
+    const log = warnings(spy).join('\n');
+    expect(log).toContain('stage=monitoring-http-403');
+    expect(log).not.toContain('google=');
+    expect(log).not.toContain('token=abc');
+    spy.mockRestore();
+  });
+
+  it('Cloud Monitoring 回 403 PERMISSION_DENIED → 記 monitoring-http-403 與 status 碼，且不含 token', async () => {
+    monitoring = () => new Response(JSON.stringify({ error: { status: 'PERMISSION_DENIED', message: 'private-detail' } }), { status: 403 });
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = await getQuota(configured());
+    expect(res.status).toBe(502);
+    const log = warnings(spy).join('\n');
+    expect(log).toContain('stage=monitoring-http-403');
+    expect(log).toContain('PERMISSION_DENIED');
+    expect(log).not.toContain('gcp-access-token');
+    expect(log).not.toContain('private-detail');
+    spy.mockRestore();
   });
 });

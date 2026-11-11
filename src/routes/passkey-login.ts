@@ -21,7 +21,7 @@ import { D1Adapter } from '../lib/oauth-d1-adapter';
 import { readJsonObject } from '../lib/oauth-request';
 import { takeOnce } from '../lib/oauth-single-use';
 import {
-  b64uEncode, parseClientData, passkeyRp, PASSKEY_CHALLENGE_MODEL, PASSKEY_CHALLENGE_TTL_SECONDS, PasskeyAssertionError, verifyAssertion,
+  advanceSignCount, b64uEncode, parseClientData, passkeyRp, PASSKEY_CHALLENGE_MODEL, PASSKEY_CHALLENGE_TTL_SECONDS, PasskeyAssertionError, verifyAssertion,
 } from '../lib/passkey';
 import { bumpRateLimit, clientIp, RATE_LIMITS, refundRateLimit } from '../lib/rate-limit';
 import { recordSecurityEvent } from '../lib/security-events';
@@ -103,15 +103,13 @@ export function registerPasskeyLoginRoutes(app: Hono<AppEnv>): void {
       );
       if (row.status !== 'active') return await fail('account_suspended');
 
-      // 兩邊都是 0（同步型 passkey 不回報計數）可過；否則必須嚴格遞增，不然視為憑證被複製
-      if ((row.sign_count > 0 || signCount > 0) && signCount <= row.sign_count) {
+      // 簽名計數不遞增視為複製的憑證；併發時條件式更新只有一個贏家（見 advanceSignCount）
+      const advanced = await advanceSignCount(DB, cred.id, row.sign_count, signCount);
+      if (advanced === 'regression') {
         await recordSecurityEvent(c.env, request, { kind: 'signature_error', reason: 'passkey_sign_count_regression', userId, clientId });
         return await fail('sign_count_regression');
       }
-      // 條件式更新：同一個憑證併發登入時，只有一個贏家
-      const upd = await DB.prepare("UPDATE passkey_credentials SET sign_count = ?, last_used_at = datetime('now') WHERE id = ? AND sign_count = ?")
-        .bind(signCount, cred.id, row.sign_count).run();
-      if ((upd.meta?.changes ?? 0) !== 1) return await fail('sign_count_race');
+      if (advanced === 'race') return await fail('sign_count_race');
     } catch (err) {
       if (err instanceof PasskeyAssertionError) return await fail(err.reason);
       if (err instanceof AppError) return await fail('malformed');

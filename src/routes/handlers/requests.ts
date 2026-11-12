@@ -14,6 +14,7 @@
 
 import { logAudit, recordEmailEvent } from '../../lib/audit';
 import { alertAdminTelegram } from '../../lib/alert';
+import { agentAuthHeaders } from '../../lib/signing';
 import { hasPermission, requireAuth, hasOpsScope, requireTripWrite } from '../../lib/permissions';
 import { assertAiConsent } from '../../lib/ai-data-consent';
 import { consumeUserBucket, RATE_LIMITS } from '../../lib/rate-limit';
@@ -202,13 +203,12 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
         // 15:57 UTC：實測 INSERT 到 mac mini 收到 /trigger 4.978s）。8s 涵蓋 99%
         // cold path；request 仍由 5min cron 兜底保證最終一致性。
         const timer = setTimeout(() => ctrl.abort(), 8000);
-        const res = await fetch(env.TRIPLINE_API_URL + '/trigger?source=api', {
+        const triggerUrl = env.TRIPLINE_API_URL + '/trigger?source=api';
+        const triggerBody = JSON.stringify({ requestId });
+        const res = await fetch(triggerUrl, {
           method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${env.TRIPLINE_API_SECRET}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ requestId }),
+          headers: { ...(await agentAuthHeaders(env, 'trigger', { url: triggerUrl, body: triggerBody })), 'Content-Type': 'application/json' },
+          body: triggerBody,
           signal: ctrl.signal,
         });
         clearTimeout(timer);

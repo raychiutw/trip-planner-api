@@ -32,6 +32,7 @@ import {
 import { json } from '../../../../../../lib/utils';
 import { expireNoteAiJobs } from '../../../../../../lib/request-termination';
 import { recordEmailEvent } from '../../../../../../lib/audit';
+import { agentAuthHeaders } from '../../../../../../lib/signing';
 import type { Env } from '../../../../../../env';
 
 // AI prompts per type — 對齊 design doc Premise 6
@@ -218,13 +219,12 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
         const ctrl = new AbortController();
         const timer = setTimeout(() => ctrl.abort(), 8000);
         try {
-          const res = await fetch(env.TRIPLINE_API_URL + '/trigger?source=api', {
+          const triggerUrl = env.TRIPLINE_API_URL + '/trigger?source=api';
+          const triggerBody = JSON.stringify({ requestId });
+          const res = await fetch(triggerUrl, {
             method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${env.TRIPLINE_API_SECRET}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ requestId }),
+            headers: { ...(await agentAuthHeaders(env, 'trigger', { url: triggerUrl, body: triggerBody })), 'Content-Type': 'application/json' },
+            body: triggerBody,
             signal: ctrl.signal,
           });
           if (!res.ok) throw new Error(`Trigger responded ${res.status}`);

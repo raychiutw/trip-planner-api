@@ -21,11 +21,16 @@
  * Required env：
  *   TRIPLINE_API_URL    — mac mini funnel URL (e.g. https://...:8443)
  *   TRIPLINE_API_SECRET — Bearer token，與 mac mini /internal/mail/send 同一組
+ *   AGENT_SIGNING_KEY_MAIL — 選用；有設就改用簽章（ADR-0011），否則退回 Bearer
  */
+
+import { agentAuthHeaders } from './signing';
 
 export interface EmailEnv {
   TRIPLINE_API_URL?: string;
   TRIPLINE_API_SECRET?: string;
+  /** 有設 → 改用簽章（purpose mail），不再帶 Bearer，也不要求 TRIPLINE_API_SECRET。 */
+  AGENT_SIGNING_KEY_MAIL?: string;
 }
 
 export interface SendEmailParams {
@@ -64,7 +69,7 @@ export async function sendEmail(
   if (!env.TRIPLINE_API_URL) {
     throw new EmailError('TRIPLINE_API_URL not configured', 500, null);
   }
-  if (!env.TRIPLINE_API_SECRET) {
+  if (!env.TRIPLINE_API_SECRET && !env.AGENT_SIGNING_KEY_MAIL) {
     throw new EmailError('TRIPLINE_API_SECRET not configured', 500, null);
   }
   // v2.33.99 security: SSRF / config-tamper guard — reject 非 Tailscale funnel
@@ -90,19 +95,18 @@ export async function sendEmail(
 
   let res: Response;
   try {
-    res = await fetch(`${env.TRIPLINE_API_URL}/internal/mail/send`, {
+    const url = `${env.TRIPLINE_API_URL}/internal/mail/send`;
+    const body = JSON.stringify({
+      to: params.to,
+      subject: params.subject,
+      html: params.html,
+      ...(params.text ? { text: params.text } : {}),
+      ...(params.template ? { template: params.template } : {}),
+    });
+    res = await fetch(url, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${env.TRIPLINE_API_SECRET}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        to: params.to,
-        subject: params.subject,
-        html: params.html,
-        ...(params.text ? { text: params.text } : {}),
-        ...(params.template ? { template: params.template } : {}),
-      }),
+      headers: { ...(await agentAuthHeaders(env, 'mail', { url, body })), 'Content-Type': 'application/json' },
+      body,
       signal: ctrl.signal,
     });
   } catch (err) {

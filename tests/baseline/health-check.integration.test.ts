@@ -11,6 +11,7 @@
  * 5. 30 秒去重保護
  * 6. Permission denied (read-only viewer 不能 POST)
  */
+import { createHash, createHmac } from 'node:crypto';
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { createTestDb, disposeMiniflare } from './setup';
 import { mockEnv, seedTrip, seedEntry, seedPoi, getDayId, seedAiConsent } from './helpers';
@@ -330,6 +331,28 @@ describe('POST 健檢 → 即時觸發 api-server', () => {
       expect((init as RequestInit).method).toBe('POST');
       expect((init as RequestInit).headers).toMatchObject({ Authorization: 'Bearer trigger-secret' });
       expect(JSON.parse((init as RequestInit).body as string)).toEqual({ requestId: report.requestId });
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('設了 AGENT_SIGNING_KEY_TRIGGER → 帶簽章 header、不帶 Bearer（簽 /trigger?source=api 與實際 body）', async () => {
+    await seed('s16-hc-trip-trigger-signed');
+    await seedOneEntry('s16-hc-trip-trigger-signed');
+    const key = 'test-key-trigger-0000000000000000';
+    const api = createApi({
+      env: mockEnv(db, { TRIPLINE_API_URL: 'https://api-server.test', TRIPLINE_API_SECRET: 'trigger-secret', AGENT_SIGNING_KEY_TRIGGER: key }),
+    });
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}', { status: 200 }));
+    try {
+      const resp = await api.request('POST', '/api/trips/s16-hc-trip-trigger-signed/health-check', { as: OWNER });
+      expect(resp.status).toBe(202);
+      const [, init] = fetchSpy.mock.calls[0]!;
+      const h = (init as RequestInit).headers as Record<string, string>;
+      expect(h.Authorization).toBeUndefined();
+      const canonical = ['TRIPLINE-HMAC-V1', 'trigger', 'POST', '/trigger?source=api', h['X-Tripline-Timestamp'], h['X-Tripline-Nonce'],
+        createHash('sha256').update((init as RequestInit).body as string).digest('hex')].join('\n');
+      expect(h['X-Tripline-Signature']).toBe(createHmac('sha256', key).update(canonical).digest('hex'));
     } finally {
       fetchSpy.mockRestore();
     }

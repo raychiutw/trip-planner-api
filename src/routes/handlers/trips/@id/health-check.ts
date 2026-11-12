@@ -23,6 +23,7 @@ import { AppError } from '../../../../errors';
 import { json } from '../../../../lib/utils';
 import { recordEmailEvent } from '../../../../lib/audit';
 import { alertAdminTelegram } from '../../../../lib/alert';
+import { agentAuthHeaders } from '../../../../lib/signing';
 import { TRAVEL_MODE_LABEL, type TravelMode } from '../../../../lib/travelMode';
 import type { Env } from '../../../../env';
 
@@ -353,13 +354,12 @@ ${formatSegmentRecords(segRes.results ?? [])}`;
         // v2.33.113: 3000 → 8000ms — see functions/api/requests.ts for full rationale
         // (CF edge → Tailscale Funnel cold connection setup can hit 4-5s)
         const timer = setTimeout(() => ctrl.abort(), 8000);
-        const res = await fetch(env.TRIPLINE_API_URL + '/trigger?source=api', {
+        const triggerUrl = env.TRIPLINE_API_URL + '/trigger?source=api';
+        const triggerBody = JSON.stringify({ requestId });
+        const res = await fetch(triggerUrl, {
           method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${env.TRIPLINE_API_SECRET}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ requestId }),
+          headers: { ...(await agentAuthHeaders(env, 'trigger', { url: triggerUrl, body: triggerBody })), 'Content-Type': 'application/json' },
+          body: triggerBody,
           signal: ctrl.signal,
         });
         clearTimeout(timer);

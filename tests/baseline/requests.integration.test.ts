@@ -4,7 +4,8 @@
  * service token（user_id=null、scope=companion）；狀態變化一律讀真實資料列。
  * 共用 D1：專用 trip id／email（s16-req-），結束時清掉自己的資料。
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { createHash, createHmac } from 'node:crypto';
 import { createTestDb, disposeMiniflare } from './setup';
 import { mockEnv, seedTrip, userIdFor, seedAiConsent } from './helpers';
 import { createApi, type Api } from './http';
@@ -142,6 +143,40 @@ describe('POST /api/requests', () => {
     const audit = await db.prepare("SELECT action, changed_by FROM audit_log WHERE trip_id = ? AND table_name = 'trip_requests' AND record_id = ?")
       .bind(TRIP, id).first<{ action: string; changed_by: string }>();
     expect(audit).toEqual({ action: 'insert', changed_by: OWNER });
+  });
+});
+
+describe('POST /api/requests 觸發 agent', () => {
+  const key = 'test-key-trigger-0000000000000000';
+  const msg = (m: string) => ({ tripId: TRIP, mode: 'trip-edit', message: m });
+
+  it('設了 AGENT_SIGNING_KEY_TRIGGER → 簽章 header、不帶 Bearer', async () => {
+    const stub = vi.fn(async () => new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', stub);
+    try {
+      const signedApi = createApi({ env: mockEnv(db, { TRIPLINE_API_URL: 'https://api.example.test', TRIPLINE_API_SECRET: 's', AGENT_SIGNING_KEY_TRIGGER: key }) });
+      const resp = await signedApi.request('POST', '/api/requests', { as: OWNER, json: msg('簽章觸發測試 A') });
+      expect(resp.status).toBe(201);
+      const [, init] = stub.mock.calls[0] as unknown as [string, RequestInit];
+      const h = init.headers as Record<string, string>;
+      expect(h.Authorization).toBeUndefined();
+      const canonical = ['TRIPLINE-HMAC-V1', 'trigger', 'POST', '/trigger?source=api', h['X-Tripline-Timestamp'], h['X-Tripline-Nonce'],
+        createHash('sha256').update(init.body as string).digest('hex')].join('\n');
+      expect(h['X-Tripline-Signature']).toBe(createHmac('sha256', key).update(canonical).digest('hex'));
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it('沒金鑰 → Bearer，無簽章 header', async () => {
+    const stub = vi.fn(async () => new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', stub);
+    try {
+      const bearerApi = createApi({ env: mockEnv(db, { TRIPLINE_API_URL: 'https://api.example.test', TRIPLINE_API_SECRET: 's' }) });
+      const resp = await bearerApi.request('POST', '/api/requests', { as: OWNER, json: msg('簽章觸發測試 B') });
+      expect(resp.status).toBe(201);
+      const h = (stub.mock.calls[0] as unknown as [string, RequestInit])[1].headers as Record<string, string>;
+      expect(h.Authorization).toBe('Bearer s');
+      expect(h['X-Tripline-Signature']).toBeUndefined();
+    } finally { vi.unstubAllGlobals(); }
   });
 });
 

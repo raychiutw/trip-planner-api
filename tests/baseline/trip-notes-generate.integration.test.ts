@@ -8,6 +8,7 @@
  *   - Debounce — 30s 內同 trip+type pending → return existing job (no double request)
  *   - trip_requests.message 含對應 prefix [行程筆記-{type}]
  */
+import { createHash, createHmac } from 'node:crypto';
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import { createTestDb, disposeMiniflare } from './setup';
 import { mockEnv, seedTrip, seedUser, seedAiConsent } from './helpers';
@@ -145,6 +146,7 @@ describe('POST /api/trips/:id/notes/:type/generate — 對外觸發 api-server',
 
   beforeAll(async () => {
     await seedTrip(db, { id: tripT, owner: ownerEmail });
+    await seedTrip(db, { id: `${tripT}-signed`, owner: ownerEmail });
   });
   afterEach(() => { vi.unstubAllGlobals(); });
 
@@ -169,6 +171,21 @@ describe('POST /api/trips/:id/notes/:type/generate — 對外觸發 api-server',
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer fake-secret');
     expect(JSON.parse(init.body as string)).toEqual({ requestId: body.requestId });
     expect(await emailEvents('trigger-failed')).toEqual([]);
+  });
+
+  it('設了 AGENT_SIGNING_KEY_TRIGGER → 帶簽章 header、不帶 Bearer', async () => {
+    const stub = vi.fn(async () => new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', stub);
+    const key = 'test-key-trigger-0000000000000000';
+    const env = mockEnv(db, { TRIPLINE_API_URL: 'https://api.example.test', TRIPLINE_API_SECRET: 'fake-secret', AGENT_SIGNING_KEY_TRIGGER: key } as Partial<Env>);
+    const res = await createApi({ env }).request('POST', `/api/trips/${tripT}-signed/notes/tips/generate`, { as: ownerEmail, json: {} });
+    expect(res.status).toBe(202);
+    const [, init] = stub.mock.calls[0] as unknown as [string, RequestInit];
+    const h = init.headers as Record<string, string>;
+    expect(h.Authorization).toBeUndefined();
+    const canonical = ['TRIPLINE-HMAC-V1', 'trigger', 'POST', '/trigger?source=api', h['X-Tripline-Timestamp'], h['X-Tripline-Nonce'],
+      createHash('sha256').update(init.body as string).digest('hex')].join('\n');
+    expect(h['X-Tripline-Signature']).toBe(createHmac('sha256', key).update(canonical).digest('hex'));
   });
 
   it('api-server 回非 2xx → 仍回 202（不影響使用者），並記一筆 trigger-failed', async () => {

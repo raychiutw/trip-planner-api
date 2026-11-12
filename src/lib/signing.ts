@@ -84,3 +84,28 @@ export async function signAgentRequest(input: SignAgentRequestInput): Promise<Re
     [SIGNING_HEADERS.signature]: sig,
   };
 }
+
+const PURPOSE_KEY = {
+  trigger: 'AGENT_SIGNING_KEY_TRIGGER',
+  mail: 'AGENT_SIGNING_KEY_MAIL',
+} as const;
+
+export interface AgentAuthEnv {
+  TRIPLINE_API_SECRET?: string;
+  AGENT_SIGNING_KEY_TRIGGER?: string;
+  AGENT_SIGNING_KEY_MAIL?: string;
+}
+
+/**
+ * 呼叫 agent 的認證 header（issue #85 並存期）：該 purpose 的簽章金鑰有設 → 只回簽章 header；
+ * 沒設 → 回舊的 Bearer（行為與改動前完全相同）。簽的 body 必須是實際送出的那個字串。
+ */
+export async function agentAuthHeaders(
+  env: AgentAuthEnv,
+  purpose: keyof typeof PURPOSE_KEY,
+  req: { url: string; body: string; method?: string },
+): Promise<Record<string, string>> {
+  const key = env[PURPOSE_KEY[purpose]];
+  if (!key) return { Authorization: `Bearer ${env.TRIPLINE_API_SECRET}` };
+  return signAgentRequest({ purpose, key, method: req.method ?? 'POST', url: req.url, body: req.body });
+}

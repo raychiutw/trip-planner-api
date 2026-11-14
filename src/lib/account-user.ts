@@ -26,11 +26,14 @@ export async function requireAccountUser(context: { data: unknown; env: Env }): 
   if (auth.isServiceToken || !auth.userId) throw new AppError('AUTH_REQUIRED');
   assertNotTripRestricted(auth);
   if (auth.clientId) {
-    const client = await context.env.DB
-      .prepare('SELECT first_party FROM client_apps WHERE client_id = ?')
-      .bind(auth.clientId)
-      .first<{ first_party: number }>();
-    if (client && client.first_party !== 1) {
+    // bearerAuth 已在解 token 時一併查好（省一次往返）；沒經過它的 auth（測試手造）才自己查
+    const firstParty = auth.clientFirstParty !== undefined
+      ? auth.clientFirstParty
+      : ((await context.env.DB
+        .prepare('SELECT first_party FROM client_apps WHERE client_id = ?')
+        .bind(auth.clientId)
+        .first<{ first_party: number }>())?.first_party ?? null);
+    if (firstParty !== null && firstParty !== 1) {
       throw new AppError('PERM_DENIED', '此操作僅限第一方應用程式');
     }
   }

@@ -178,6 +178,8 @@ export interface AuthData {
   clientId?: string;
   /** 這張 access token 所屬的 OAuth grant（帳號刪除的 mobile challenge 綁定它）。舊 token 可能沒有。 */
   grantId?: string;
+  /** token 所屬 client 的 client_apps.first_party（1／0）；沒有 client 列為 null；未經 bearerAuth 解出的 auth 為 undefined。 */
+  clientFirstParty?: number | null;
   /**
    * Trip-scoped token restriction (v2.55.56, tp-request downscope). When set, the
    * token may ONLY read/write this one trip — hasWritePermission / requireTripReadAccess

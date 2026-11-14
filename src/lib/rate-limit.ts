@@ -55,12 +55,23 @@ export async function checkRateLimit(
   key: string,
   config: RateLimitConfig,
 ): Promise<RateLimitResult> {
-  const now = Date.now();
-  const row = await db
-    .prepare('SELECT bucket_key, count, window_start, locked_until FROM rate_limit_buckets WHERE bucket_key = ?')
-    .bind(key)
-    .first<RateLimitRow>();
+  const row = await bucketSelect(db, key).first<RateLimitRow>();
+  return evaluateBucket(row, config);
+}
 
+/** checkRateLimit 讀 bucket 的語句；可與其他讀取放進同一個 DB.batch（一次往返），結果交給 evaluateBucket。 */
+export function bucketSelect(db: D1Database, key: string) {
+  return db
+    .prepare('SELECT bucket_key, count, window_start, locked_until FROM rate_limit_buckets WHERE bucket_key = ?')
+    .bind(key);
+}
+
+/** checkRateLimit 的判斷本體（純函式）：row 為 null／undefined = 沒有 bucket。 */
+export function evaluateBucket(
+  row: RateLimitRow | null | undefined,
+  config: RateLimitConfig,
+  now = Date.now(),
+): RateLimitResult {
   if (!row) return { ok: true, count: 0 };
 
   // Locked?

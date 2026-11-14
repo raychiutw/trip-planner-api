@@ -13,6 +13,12 @@ export const USER_ACCESS_TOKEN_TTL_SEC = 15 * 60;
 export const SERVICE_ACCESS_TOKEN_TTL_SEC = 60 * 60;
 const REFRESH_TOKEN_TTL_SEC = 30 * 24 * 60 * 60;
 
+/**
+ * 排到回應之後才做的工作（waitUntil）。只給「成功路徑的稽核」用：稽核寫入本來就是 best-effort（recordAuthEvent 不丟例外、
+ * 失敗只 console.error），改成回應後執行不改變失敗語意；重放／撤銷等安全事件的稽核仍然在回應前完成。
+ */
+export type Defer = (work: () => Promise<unknown>) => void;
+
 export type TokenLifecycleResult =
   | { ok: true; tokens: { access_token: string; refresh_token: string }; userId: string; scopes: string[] }
   | { ok: false; error: 'invalid_request' | 'invalid_grant' | 'invalid_scope'; description: string };
@@ -78,7 +84,7 @@ export async function exchangeAuthorizationCode(
   env: Env, request: Request, clientId: string,
   body: { code?: string; redirect_uri?: string; code_verifier?: string; scope?: string },
   /** public client 一律強制 PKCE（OAuth 2.1）；confidential 沿用「code 有 challenge 才驗」。 */
-  opts: { requirePkce: boolean; dpopJkt?: string } = { requirePkce: true },
+  opts: { requirePkce: boolean; dpopJkt?: string; defer?: Defer } = { requirePkce: true },
 ): Promise<TokenLifecycleResult> {
   const code = body.code;
   if (!code) return failure('invalid_request', 'Missing code');
@@ -163,10 +169,11 @@ export async function exchangeAuthorizationCode(
   const tokens = await issueTokenPair(env.DB, clientId, codeRow.user_id, finalScopes,
     { model: 'AuthorizationCode', id: code }, opts.dpopJkt);
   if (!tokens) return failure('invalid_grant', 'Authorization code no longer available');
-  await recordAuthEvent(env.DB, request, {
+  const successAudit = () => recordAuthEvent(env.DB, request, {
     eventType: 'token_issue', outcome: 'success', userId: codeRow.user_id, clientId,
     metadata: { grant_type: 'authorization_code', scopes: finalScopes },
   }, env);
+  if (opts.defer) opts.defer(successAudit); else await successAudit();
   return { ok: true, tokens, userId: codeRow.user_id, scopes: finalScopes };
 }
 
@@ -183,7 +190,7 @@ interface RefreshTokenPayload extends AdapterPayload {
 export async function rotateRefreshToken(
   env: Env, request: Request, clientId: string,
   body: { refresh_token?: string; scope?: string },
-  opts: { dpopJkt?: string } = {},
+  opts: { dpopJkt?: string; defer?: Defer; refreshRow?: AdapterPayload } = {},
 ): Promise<TokenLifecycleResult> {
   const refreshTokenInput = body.refresh_token;
   if (!refreshTokenInput) {
@@ -191,7 +198,8 @@ export async function rotateRefreshToken(
   }
 
   const refreshAdapter = new D1Adapter(env.DB, 'RefreshToken');
-  const refreshRow = (await refreshAdapter.find(refreshTokenInput)) as RefreshTokenPayload | undefined;
+  // 呼叫端可能已經把 refresh row 跟 DPoP jti 登記併成同一次往返讀好了（'refreshRow' in opts 才算有給，undefined = 查無）
+  const refreshRow = ('refreshRow' in opts ? opts.refreshRow : await refreshAdapter.find(refreshTokenInput)) as RefreshTokenPayload | undefined;
 
   if (!refreshRow) {
     return failure('invalid_grant', 'refresh_token expired or invalid');
@@ -266,12 +274,13 @@ export async function rotateRefreshToken(
     opts.dpopJkt,
   );
   if (!tokens) return failure('invalid_grant', 'refresh_token no longer available');
-  await recordAuthEvent(env.DB, request, {
+  const successAudit = () => recordAuthEvent(env.DB, request, {
     eventType: 'token_issue',
     outcome: 'success',
     userId: refreshRow.user_id,
     clientId,
     metadata: { grant_type: 'refresh_token', scopes: finalScopes },
   }, env);
+  if (opts.defer) opts.defer(successAudit); else await successAudit();
   return { ok: true, tokens, userId: refreshRow.user_id, scopes: finalScopes };
 }

@@ -18,7 +18,7 @@ const PRIVATE_JWK_MEMBERS = ['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k'];
 
 export type DpopResult = { ok: true; jkt: string } | { ok: false; reason: string };
 
-const fail = (reason: string): DpopResult => ({ ok: false, reason });
+const fail = (reason: string): { ok: false; reason: string } => ({ ok: false, reason });
 
 function b64uToBytes(s: string): Uint8Array {
   if (!/^[A-Za-z0-9_-]*$/.test(s)) throw new Error('bad base64url');
@@ -62,15 +62,16 @@ export function readDpopHeader(request: Request): string | null | 'multiple' {
   return v.includes(',') ? 'multiple' : v;
 }
 
+export type DpopChecked = { ok: true; jkt: string; jti: string; expiresAt: number } | { ok: false; reason: string };
+
 /**
- * 驗證 proof。accessToken 有給 = 資源請求（必須帶正確的 ath）；沒給 = token endpoint。
- * 驗證全部通過後才登記 jti，無效 proof 不會寫入資料庫。
+ * 只做「不碰資料庫」的驗證（簽章、欄位、時間窗、ath）。通過才給出 jkt／jti／jti 保留到期時間，
+ * **尚未登記 jti**：呼叫端必須接著登記（registerDpopJti 或 dpopJtiInsert），否則沒有重放防護。
  */
-export async function verifyDpopProof(
+export async function checkDpopProof(
   request: Request,
-  db: Env['DB'],
   opts: { accessToken?: string; now?: number } = {},
-): Promise<DpopResult> {
+): Promise<DpopChecked> {
   const raw = readDpopHeader(request);
   if (raw === null) return fail('missing');
   if (raw === 'multiple') return fail('multiple proofs');
@@ -110,13 +111,53 @@ export async function verifyDpopProof(
     if (opts.accessToken !== undefined && claims.ath !== (await sha256B64u(opts.accessToken))) return fail('ath');
 
     const jkt = await jwkThumbprint(pub);
-    // 最後才登記 jti（jti 以金鑰為範圍）；已存在 = 重放
-    const res = await db
-      .prepare("INSERT INTO oauth_models (name, id, payload, expires_at) VALUES (?, ?, '{}', ?) ON CONFLICT(name, id) DO NOTHING")
-      .bind(JTI_MODEL, `${jkt}:${claims.jti}`, (opts.now ?? Date.now()) + 2 * DPOP_WINDOW_SEC * 1000)
-      .run();
-    if ((res.meta?.changes ?? 0) !== 1) return fail('replay');
-    return { ok: true, jkt };
+    return { ok: true, jkt, jti: claims.jti, expiresAt: (opts.now ?? Date.now()) + 2 * DPOP_WINDOW_SEC * 1000 };
+  } catch {
+    return fail('malformed');
+  }
+}
+
+/** jti 的登記 id（以金鑰為範圍）。 */
+export const dpopJtiId = (v: { jkt: string; jti: string }) => `${v.jkt}:${v.jti}`;
+
+/** 登記 jti；回傳 false = 已存在 = 重放。 */
+export async function registerDpopJti(db: Env['DB'], v: { jkt: string; jti: string; expiresAt: number }): Promise<boolean> {
+  const res = await db
+    .prepare("INSERT INTO oauth_models (name, id, payload, expires_at) VALUES (?, ?, '{}', ?) ON CONFLICT(name, id) DO NOTHING")
+    .bind(JTI_MODEL, dpopJtiId(v), v.expiresAt)
+    .run();
+  return (res.meta?.changes ?? 0) === 1;
+}
+
+/**
+ * 資源端點專用：與「查 access token」同一個 D1 batch 送出的 jti 登記語句，
+ * 只有在該 token 存在、未過期且綁定的金鑰就是這把（jkt）時才寫入，所以 token 無效或金鑰不符的請求不會留下 jti。
+ * changes=1 才是首次使用；0 = 重放（呼叫端要先確認 token 有效，才能把 0 解讀為重放）。
+ */
+export function dpopJtiInsertForToken(db: Env['DB'], v: { jkt: string; jti: string; expiresAt: number }, accessToken: string, now = Date.now()) {
+  return db
+    .prepare(
+      `INSERT INTO oauth_models (name, id, payload, expires_at)
+       SELECT ?, ?, '{}', ?
+       WHERE EXISTS (SELECT 1 FROM oauth_models WHERE name = 'AccessToken' AND id = ? AND expires_at >= ? AND json_extract(payload, '$.cnf.jkt') = ?)
+       ON CONFLICT(name, id) DO NOTHING`,
+    )
+    .bind(JTI_MODEL, dpopJtiId(v), v.expiresAt, accessToken, now, v.jkt);
+}
+
+/**
+ * 驗證 proof。accessToken 有給 = 資源請求（必須帶正確的 ath）；沒給 = token endpoint。
+ * 驗證全部通過後才登記 jti，無效 proof 不會寫入資料庫。
+ */
+export async function verifyDpopProof(
+  request: Request,
+  db: Env['DB'],
+  opts: { accessToken?: string; now?: number } = {},
+): Promise<DpopResult> {
+  const checked = await checkDpopProof(request, opts);
+  if (!checked.ok) return checked;
+  try {
+    return (await registerDpopJti(db, checked)) ? { ok: true, jkt: checked.jkt } : fail('replay');
   } catch {
     return fail('malformed');
   }

@@ -12,10 +12,10 @@
 import type { MiddlewareHandler } from 'hono';
 import { AppError, errorResponse } from './errors';
 import type { AppEnv } from './env';
-import { verifyDpopProof } from './lib/dpop';
+import { checkDpopProof, dpopJtiInsertForToken, type DpopChecked } from './lib/dpop';
 import { classifyDpopFailure, recordSecurityEvent, type SecurityEvent } from './lib/security-events';
 import { isFirstPartyClientId } from './lib/first-party';
-import { D1Adapter, type AdapterPayload } from './lib/oauth-d1-adapter';
+import type { AdapterPayload } from './lib/oauth-d1-adapter';
 import type { AuthData } from './types';
 
 /** 合法 opaque token 的長度上限；超過直接拒絕，不打 DB。 */
@@ -35,8 +35,39 @@ function parseAuthorization(header: string): { scheme: 'Bearer' | 'DPoP'; token:
   return { scheme: m[1]!.toLowerCase() === 'dpop' ? 'DPoP' : 'Bearer', token };
 }
 
-async function resolveToken(db: D1Database, token: string, firstPartyOverride?: string): Promise<{ auth: AuthData; boundJkt: string | null } | null> {
-  const row = (await new D1Adapter(db, 'AccessToken').find(token)) as AdapterPayload | undefined;
+interface TokenRow { payload: string; expires_at: number; u_email: string | null; u_status: string | null; ca_first_party: number | null }
+
+/**
+ * 一次 D1 往返解出 token → 使用者 → client（原本是 token、users 兩次循序查詢，requireAccountUser 還要再查一次 client_apps）。
+ * dpop 有給時，jti 登記語句與查詢放同一個 batch（登記只在 token 有效且綁定這把金鑰時才寫入，見 dpopJtiInsertForToken）。
+ */
+async function resolveToken(
+  db: D1Database,
+  token: string,
+  firstPartyOverride?: string,
+  dpop?: { jkt: string; jti: string; expiresAt: number },
+): Promise<{ auth: AuthData; boundJkt: string | null; jtiFresh: boolean } | null> {
+  const select = db
+    .prepare(
+      `SELECT m.payload, m.expires_at, u.email AS u_email, u.status AS u_status, ca.first_party AS ca_first_party
+         FROM oauth_models m
+         LEFT JOIN users u ON u.id = json_extract(m.payload, '$.user_id')
+         LEFT JOIN client_apps ca ON ca.client_id = json_extract(m.payload, '$.client_id')
+        WHERE m.name = 'AccessToken' AND m.id = ?`,
+    )
+    .bind(token);
+  let jtiFresh = false;
+  let rows: TokenRow[];
+  if (dpop) {
+    const [ins, sel] = await db.batch([dpopJtiInsertForToken(db, dpop, token), select]);
+    jtiFresh = (ins?.meta?.changes ?? 0) === 1;
+    rows = (sel?.results ?? []) as TokenRow[];
+  } else {
+    rows = ((await select.all<TokenRow>()).results ?? []) as TokenRow[];
+  }
+  const found = rows[0];
+  if (!found || found.expires_at < Date.now()) return null; // 過期視為不存在（同 D1Adapter.find）
+  const row = JSON.parse(found.payload) as AdapterPayload;
   if (!row || typeof row !== 'object' || typeof row.client_id !== 'string' || !('user_id' in row)) return null;
 
   const clientId = row.client_id;
@@ -46,17 +77,17 @@ async function resolveToken(db: D1Database, token: string, firstPartyOverride?: 
   const grantId = typeof row.grantId === 'string' ? row.grantId : undefined;
   const cnf = row.cnf as { jkt?: unknown } | undefined;
   const boundJkt = typeof cnf?.jkt === 'string' ? cnf.jkt : null;
+  const clientFirstParty = found.ca_first_party ?? null;
 
   if (row.user_id === null) {
     // service token：不繼承任何 email；維運權限靠 ops scope
-    return { auth: { email: `service:${clientId}`, userId: null, isServiceToken: true, scopes, clientId, isFirstPartyClient, restrictTrip }, boundJkt };
+    return { auth: { email: `service:${clientId}`, userId: null, isServiceToken: true, scopes, clientId, isFirstPartyClient, restrictTrip, clientFirstParty }, boundJkt, jtiFresh };
   }
   if (typeof row.user_id !== 'string') return null;
 
-  const user = await db.prepare('SELECT email, status FROM users WHERE id = ?').bind(row.user_id).first<{ email: string; status: string }>();
   // 使用者不存在或被停權 → 拒絕（舊入口是 best-effort 放行；新入口 fail-closed）
-  if (!user || user.status !== 'active') return null;
-  return { auth: { email: user.email.trim().toLowerCase(), userId: row.user_id, isServiceToken: false, scopes, clientId, grantId, isFirstPartyClient, restrictTrip }, boundJkt };
+  if (found.u_email === null || found.u_status !== 'active') return null;
+  return { auth: { email: found.u_email.trim().toLowerCase(), userId: row.user_id, isServiceToken: false, scopes, clientId, grantId, isFirstPartyClient, restrictTrip, clientFirstParty }, boundJkt, jtiFresh };
 }
 
 export const bearerAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
@@ -75,7 +106,10 @@ export const bearerAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
   const { scheme, token } = parsed;
   let resolved: Awaited<ReturnType<typeof resolveToken>> = null;
   try {
-    resolved = await resolveToken(c.env.DB, token, (c.env as { TP_REQUEST_CLIENT_ID?: string }).TP_REQUEST_CLIENT_ID);
+    // proof 的純運算驗證（簽章、ath、時間窗）先做；要不要「採信」它的結果等 token 解出來再決定，
+    // 所以無效 token 搭配壞 proof 仍然只記 invalid_token（不會變成會告警的 signature_error）。
+    const checked: DpopChecked | undefined = scheme === 'DPoP' ? await checkDpopProof(c.req.raw, { accessToken: token }) : undefined;
+    resolved = await resolveToken(c.env.DB, token, (c.env as { TP_REQUEST_CLIENT_ID?: string }).TP_REQUEST_CLIENT_ID, checked?.ok ? checked : undefined);
     if (resolved) {
       const who = { userId: resolved.auth.userId, clientId: resolved.auth.clientId };
       if (scheme === 'Bearer') {
@@ -84,9 +118,10 @@ export const bearerAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
       } else {
         // DPoP scheme 只收綁定的 token，且 proof 的金鑰必須就是綁定的那把
         if (!resolved.boundJkt) return fail({ kind: 'auth_failure', reason: 'dpop_unbound', ...who }, 'DPoP');
-        const proof = await verifyDpopProof(c.req.raw, c.env.DB, { accessToken: token });
-        if (!proof.ok) return fail({ ...classifyDpopFailure(proof.reason), ...who }, 'DPoP');
-        if (proof.jkt !== resolved.boundJkt) return fail({ kind: 'signature_error', reason: 'key_mismatch', ...who }, 'DPoP');
+        if (!checked!.ok) return fail({ ...classifyDpopFailure(checked!.reason), ...who }, 'DPoP');
+        if (checked!.jkt !== resolved.boundJkt) return fail({ kind: 'signature_error', reason: 'key_mismatch', ...who }, 'DPoP');
+        // jti 已存在 = 重放（登記語句與查詢同批送出；token 有效且金鑰相符才會走到這裡，所以 0 筆只可能是重放）
+        if (!resolved.jtiFresh) return fail({ ...classifyDpopFailure('replay'), ...who }, 'DPoP');
       }
     }
   } catch {

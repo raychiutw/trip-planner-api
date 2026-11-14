@@ -56,24 +56,26 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
   const session = await requireAccountUser(context);
   const userId = session.uid;
 
-  const hasPassword = (await findLocalPasswordHash(context.env, userId)) !== null;
-
-  const owned = await context.env.DB
-    .prepare('SELECT count(*) AS n FROM trips WHERE owner_user_id = ?')
-    .bind(userId)
-    .first<{ n: number }>();
-
-  // 受影響的共編者 = 這些行程上「不是自己」的 distinct user。
-  // DISTINCT 是必要的：同一人可能出現在多個行程，不能重複計數。
-  const collab = await context.env.DB
-    .prepare(
-      `SELECT count(DISTINCT tp.user_id) AS n
-         FROM trip_permissions tp
-         JOIN trips t ON t.id = tp.trip_id
-        WHERE t.owner_user_id = ? AND tp.user_id != ?`,
-    )
-    .bind(userId, userId)
-    .first<{ n: number }>();
+  // 三個查詢互不相依：一次發出，不循序等三趟往返
+  const [passwordHash, owned, collab] = await Promise.all([
+    findLocalPasswordHash(context.env, userId),
+    context.env.DB
+      .prepare('SELECT count(*) AS n FROM trips WHERE owner_user_id = ?')
+      .bind(userId)
+      .first<{ n: number }>(),
+    // 受影響的共編者 = 這些行程上「不是自己」的 distinct user。
+    // DISTINCT 是必要的：同一人可能出現在多個行程，不能重複計數。
+    context.env.DB
+      .prepare(
+        `SELECT count(DISTINCT tp.user_id) AS n
+           FROM trip_permissions tp
+           JOIN trips t ON t.id = tp.trip_id
+          WHERE t.owner_user_id = ? AND tp.user_id != ?`,
+      )
+      .bind(userId, userId)
+      .first<{ n: number }>(),
+  ]);
+  const hasPassword = passwordHash !== null;
 
   return rawJson({
     hasPassword,

@@ -73,7 +73,7 @@ describe('302 Location 的 reauth（顯示用）', () => {
   });
 
   it('一般授權（沒有 prompt=login，或 prompt=login 但沒有意圖）→ 只有 request_id，也不記 reauth', async () => {
-    for (const p of [{}, { biometric_intent: 'enable', expected_account: userIdFor(EMAIL) }, { prompt: 'login' }, { prompt: 'consent', biometric_intent: 'enable', expected_account: userIdFor(EMAIL) }]) {
+    for (const p of [{} as Record<string, string>, { biometric_intent: 'enable', expected_account: userIdFor(EMAIL) }, { prompt: 'login' }, { prompt: 'consent', biometric_intent: 'enable', expected_account: userIdFor(EMAIL) }]) {
       const loc = await location(p);
       expect([...loc.searchParams.keys()]).toEqual(['request_id']);
       const row = await db.prepare("SELECT json_extract(payload, '$.reauth_intent') AS i FROM oauth_models WHERE name = 'AuthRequest' AND id = ?").bind(loc.searchParams.get('request_id')).first<{ i: unknown }>();

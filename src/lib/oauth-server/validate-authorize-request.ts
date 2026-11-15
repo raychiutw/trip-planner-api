@@ -164,3 +164,40 @@ export function validateAuthorizeRequest(
     prompt: req.prompt ?? null,
   };
 }
+
+/** 載入 client（authorize 與授權請求端點共用；找不到 → null）。 */
+export async function loadClientApp(db: D1Database, clientId: string): Promise<ClientAppRow | null> {
+  return db
+    .prepare('SELECT client_id, client_type, app_name, redirect_uris, allowed_scopes, status FROM client_apps WHERE client_id = ?')
+    .bind(clientId)
+    .first<ClientAppRow>();
+}
+
+/** 授權請求存下來的、驗過的參數（結構型別，避免依賴 auth-request）。 */
+export interface StoredAuthorizeParams {
+  client_id: string;
+  redirect_uri: string;
+  scopes: string[];
+  state: string | null;
+  code_challenge: string | null;
+  code_challenge_method: 'S256' | null;
+  prompt: string | null;
+}
+
+/** 以存下的參數重跑一次驗證（結果的 redirectUri 一定是 client 已註冊的）。失敗 → null。 */
+export function revalidateStoredRequest(req: StoredAuthorizeParams, client: ClientAppRow | null): ValidatedRequest | null {
+  const result = validateAuthorizeRequest(
+    {
+      response_type: 'code',
+      client_id: req.client_id,
+      redirect_uri: req.redirect_uri,
+      scope: req.scopes.join(' '),
+      state: req.state ?? undefined,
+      code_challenge: req.code_challenge ?? undefined,
+      code_challenge_method: req.code_challenge_method ?? undefined,
+      prompt: req.prompt ?? undefined,
+    },
+    client,
+  );
+  return 'code' in result ? null : result;
+}

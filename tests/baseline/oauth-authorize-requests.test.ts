@@ -8,6 +8,7 @@ import { createTestDb, disposeMiniflare } from './setup';
 import { mockEnv, userIdFor } from './helpers';
 import { createApi, type Api } from './http';
 import { D1Adapter } from '../../src/lib/oauth-d1-adapter';
+import { createAuthRequest, peekAuthRequest, type AuthRequestPayload } from '../../src/lib/auth-request';
 
 const CLIENT = 'h1-areq-partner';
 const CB = 'https://x.com/cb';
@@ -23,16 +24,14 @@ let api: Api;
 
 const consentRows = async () => (await db.prepare("SELECT payload, expires_at FROM oauth_models WHERE name = 'Consent' AND id LIKE 'h1-%' OR (name = 'Consent' AND json_extract(payload, '$.client_id') = ?)").bind(CLIENT).all<{ payload: string; expires_at: number }>()).results;
 const codeRows = async () => (await db.prepare("SELECT id, payload FROM oauth_models WHERE name = 'AuthorizationCode' AND json_extract(payload, '$.client_id') = ?").bind(CLIENT).all<{ id: string; payload: string }>()).results;
-const requestExists = async (id: string) => (await db.prepare("SELECT 1 AS x FROM oauth_models WHERE name = 'AuthRequest' AND id = ?").bind(id).first()) !== null;
+const requestExists = async (id: string) => (await peekAuthRequest(db, id)) !== undefined;
 
 /** 直接存一筆 AuthRequest（等同 /authorize 通過驗證後的結果）。 */
 async function putRequest(over: Record<string, unknown> = {}, ttl = 600): Promise<string> {
-  const id = `h1-areq-${crypto.randomUUID()}`;
-  await new D1Adapter(db, 'AuthRequest').upsert(id, {
+  return createAuthRequest(db, {
     client_id: CLIENT, redirect_uri: CB, scopes: ['openid', 'profile'], state: 'csrf-1',
     code_challenge: PKCE.code_challenge, code_challenge_method: 'S256', prompt: null, ...over,
-  }, ttl);
-  return id;
+  } as AuthRequestPayload, { id: `h1-areq-${crypto.randomUUID()}`, ttlSec: ttl });
 }
 
 const approve = (id: string, as: string | null = EMAIL, extra: Record<string, unknown> = {}) =>

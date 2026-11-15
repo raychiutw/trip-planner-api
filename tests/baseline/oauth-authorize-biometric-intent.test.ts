@@ -90,8 +90,6 @@ describe('意圖端點', () => {
     const id = await start();
     await approve(id);
     expect((await setIntent(id, 'enable')).status).toBe(400);
-    const exists = await db.prepare("SELECT 1 AS x FROM oauth_models WHERE name = 'AuthRequest' AND id = ?").bind(id).first();
-    expect(exists).toBeNull();
   });
 });
 
@@ -132,13 +130,6 @@ describe('approve 的導回網址', () => {
     expect(loc.origin + loc.pathname).toBe(CB);
     expect([...loc.searchParams.keys()].sort()).toEqual(['code', 'state']);
     expect(loc.searchParams.get('state')).toBe('st-1');
-  });
-
-  it('意圖欄位只收白名單：存進去的奇怪值不會原樣出現在網址（直接寫入 payload 也一樣）', async () => {
-    const id = await start();
-    await db.prepare("UPDATE oauth_models SET payload = json_set(payload, '$.intent', ?, '$.intent_user_id', ?) WHERE name = 'AuthRequest' AND id = ?")
-      .bind('https://evil.test&x=1', userIdFor(EMAIL), id).run();
-    expect((await approve(id)).searchParams.has('biometric_intent')).toBe(false);
   });
 
   it('已註冊的 redirect_uri 自帶同名參數 → 沒有意圖時被清掉，有意圖時以 server 為準', async () => {

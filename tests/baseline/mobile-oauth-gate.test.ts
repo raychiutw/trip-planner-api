@@ -14,7 +14,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDb, disposeMiniflare } from './setup';
 import { mockEnv, userIdFor } from './helpers';
 import { createApi } from './http';
-import { D1Adapter } from '../../src/lib/oauth-d1-adapter';
+import { createAuthRequest } from '../../src/lib/auth-request';
 import { MOBILE_PROD_REDIRECT, MOBILE_UAT_REDIRECT, MOBILE_DEV_REDIRECT } from '../../src/lib/mobile-oauth';
 import type { Env } from '../../src/env';
 
@@ -104,10 +104,10 @@ describe('authorize：環境閘門', () => {
 describe('approve：環境閘門（取代舊 consent）', () => {
   async function putRequest(clientId: string, redirectUri: string): Promise<string> {
     const id = `mg-areq-${crypto.randomUUID()}`;
-    await new D1Adapter(db, 'AuthRequest').upsert(id, {
+    await createAuthRequest(db, {
       client_id: clientId, redirect_uri: redirectUri, scopes: ['openid', 'profile'], state: 's',
       code_challenge: 'challenge-'.repeat(5), code_challenge_method: 'S256', prompt: null,
-    }, 600);
+    }, { id });
     return id;
   }
   const approve = (api: ReturnType<typeof apiFor>, origin: string, id: string, decision = 'approve') =>

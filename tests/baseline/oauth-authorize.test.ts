@@ -116,6 +116,14 @@ describe('GET /api/oauth/authorize', () => {
     expect(await codesCount()).toBe(0); // 還沒同意，不發 code
   });
 
+  it('public client 的 PKCE challenge 存進授權請求', async () => {
+    const res = await authorize({ client_id: PUBLIC_CLIENT, redirect_uri: CB, response_type: 'code', scope: 'openid', code_challenge: 'pkce-challenge-abc', code_challenge_method: 'S256', state: 's' });
+    expect(res.status).toBe(302);
+    const ids = await storedRequestIds(PUBLIC_CLIENT);
+    expect(ids).toHaveLength(1);
+    expect((await peekAuthRequest(db, ids[0]!))!.payload).toMatchObject({ code_challenge: 'pkce-challenge-abc', code_challenge_method: 'S256' });
+  });
+
   it('每次請求的 request_id 都不同', async () => {
     const a = new URL((await authorize(VALID)).headers.get('Location')!).searchParams.get('request_id');
     const b = new URL((await authorize(VALID)).headers.get('Location')!).searchParams.get('request_id');

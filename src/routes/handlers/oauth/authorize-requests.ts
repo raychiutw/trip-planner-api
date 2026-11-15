@@ -12,6 +12,9 @@
  * - redirect_to 一律由 server 端存的、已驗過的 redirect_uri 組成；不收任何由 web 傳入的 URL 或參數。
  *   approve 時再驗一次 client（仍啟用、redirect_uri 仍已註冊），避免授權請求建立後 client 被停用或改註冊。
  * - 意圖只綁定設定它的使用者；approve 時只有同一位使用者才會讓 server 在 redirect_to 加 biometric_intent 旗標（值只來自白名單）。
+ * - 重新驗證模式（AuthRequest 有 reauth_intent，由 App 以 prompt=login + biometric_intent + expected_account 發起）：
+ *   approve 要求 bearer 是剛用密碼登入的（否則 403 OAUTH_REAUTH_REQUIRED，請求保留可重試）、且使用者就是 expected_account
+ *   （否則 403 OAUTH_REAUTH_ACCOUNT_MISMATCH，不發 code、請求已燒掉）；意圖只來自 App，intent 端點在此模式回 400。
  * - Consent 沿用舊 consent.ts：key = `${user}:${client}`、TTL 1 年、儲存驗過的 scopes。
  */
 import { AppError, oauthErrorResponse } from '../../../errors';
@@ -35,6 +38,21 @@ function requireUserId(context: { data: unknown }): string {
   if (!auth) throw new AppError('AUTH_REQUIRED');
   if (!auth.userId) throw new AppError('PERM_DENIED', '授權需要使用者身份');
   return auth.userId;
+}
+
+/**
+ * 這個 bearer 是否「剛用密碼登入」得到的：/api/oauth/login 簽的 code（redirect_uri 為 null、TTL 60 秒）
+ * 在換成 token 後仍留在 oauth_models 到期，且 grantId 與 bearer 相同。refresh 還原的登入沿用舊 grantId，
+ * 而該 code 早已過期被清，所以還原的舊登入通過不了。不需要 schema 變更。
+ * 限制：登入後 60 秒內才能批准；超過要重新輸入密碼。
+ */
+async function isFreshPasswordLogin(db: D1Database, grantId: string | undefined): Promise<boolean> {
+  if (!grantId) return false;
+  const row = await db
+    .prepare("SELECT 1 AS x FROM oauth_models WHERE name = 'AuthorizationCode' AND json_extract(payload, '$.grantId') = ? AND json_extract(payload, '$.redirect_uri') IS NULL AND expires_at >= ?")
+    .bind(grantId, Date.now())
+    .first();
+  return !!row;
 }
 
 async function loadClient(db: D1Database, clientId: string): Promise<ClientAppRow | null> {
@@ -92,6 +110,9 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
 export const onRequestPostIntent: PagesFunction<Env> = async (context) => {
   const userId = requireUserId(context);
   const id = (context.params as Record<string, string>).id ?? '';
+  // 重新驗證模式的意圖由 App 在發起授權時決定，web 不能事後設定或覆寫
+  const existing = await new D1Adapter(context.env.DB, 'AuthRequest').find(id);
+  if (existing && (existing as AuthRequestPayload).reauth_intent) throw new AppError('DATA_VALIDATION', '重新驗證請求的意圖由 App 決定，不可變更');
   const body = (await context.request.json().catch(() => null)) as { intent?: unknown } | null;
   const intent = body?.intent;
   if (intent !== 'enable' && intent !== 'disable' && intent !== null) throw new AppError('DATA_VALIDATION', 'intent 必須是 enable、disable 或 null');
@@ -110,6 +131,12 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
   const { DB } = context.env;
 
   // 先搶佔刪除：贏家才繼續（單次使用）
+  // 重新驗證模式：先確認這個 bearer 是剛用密碼登入的（不燒掉請求，讓使用者重新登入後可再批准）
+  if (decision === 'approve') {
+    const peek = (await new D1Adapter(DB, 'AuthRequest').find(params.id ?? '')) as AuthRequestPayload | undefined;
+    if (peek?.reauth_intent && !(await isFreshPasswordLogin(DB, getAuth(context)?.grantId))) throw new AppError('OAUTH_REAUTH_REQUIRED');
+  }
+
   const taken = await takeOnce(DB, 'AuthRequest', params.id ?? '');
   if (!taken || !isAuthRequest(taken)) throw invalidRequest();
   const req = taken;
@@ -130,6 +157,14 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
       eventType: 'oauth_consent', outcome: 'failure', userId, clientId: validated.client.client_id, failureReason: 'access_denied',
     }, context.env);
     return reply(buildClientRedirect(validated.redirectUri, { error: 'access_denied', state: validated.state }));
+  }
+
+  // 重新驗證模式：批准者必須是 App 目前的帳號；不符就不發 code（請求已被搶佔，不可重試）
+  if (req.reauth_intent && req.expected_account !== userId) {
+    await recordAuthEvent(DB, context.request, {
+      eventType: 'oauth_consent', outcome: 'failure', userId, clientId: validated.client.client_id, failureReason: 'reauth_account_mismatch',
+    }, context.env);
+    throw new AppError('OAUTH_REAUTH_ACCOUNT_MISMATCH');
   }
 
   // approve：寫入同意（驗過的 scopes，同 key 覆寫）→ 發 authorization code
@@ -160,6 +195,8 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
   return reply(buildClientRedirect(validated.redirectUri, {
     code, state: validated.state,
     // 旗標只由 server 依存下的意圖決定：必須是白名單值，且設定者就是目前批准的使用者
-    biometricIntent: (req.intent === 'enable' || req.intent === 'disable') && req.intent_user_id === userId ? req.intent : undefined,
+    biometricIntent: req.reauth_intent
+      ? (req.reauth_intent === 'enable' || req.reauth_intent === 'disable' ? req.reauth_intent : undefined)
+      : (req.intent === 'enable' || req.intent === 'disable') && req.intent_user_id === userId ? req.intent : undefined,
   }));
 };

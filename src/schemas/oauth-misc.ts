@@ -53,6 +53,8 @@ export const OauthMisc_AuthorizeQuery = z.object({
   code_challenge_method: z.string().optional().openapi({ example: 'S256' }),
   prompt: z.string().optional(),
   biometric_hint: z.string().optional().openapi({ description: 'App 發起授權時帶：faceid｜touchid｜generic；其他值當作沒帶' }),
+  biometric_intent: z.string().optional().openapi({ description: '重新驗證模式（需 prompt=login 與 expected_account）：enable｜disable；其他值當作沒帶' }),
+  expected_account: z.string().optional().openapi({ description: 'App 目前帳號的 user id（id_token 的 sub），1～64 字元 [A-Za-z0-9_-]；有 biometric_intent 時必填，缺少或格式不符回 invalid_request' }),
 });
 
 export const OauthMisc_AuthRequestInfo = z.object({

@@ -170,3 +170,33 @@ describe('approve 的導回網址', () => {
     expect(loc.searchParams.has('biometric_intent')).toBe(false);
   });
 });
+
+describe('302 Location 的 biometric_hint（登入前顯示用）', () => {
+  const location = async (params: Record<string, string> = {}) => {
+    const res = await api.get(`https://x.com/api/oauth/authorize?${new URLSearchParams({ ...VALID, ...params })}`);
+    expect(res.status).toBe(302);
+    return new URL(res.headers.get('Location')!);
+  };
+
+  it.each(['faceid', 'touchid', 'generic'])('白名單值 %s → Location 多同名 query，且只有 request_id 與 biometric_hint', async (hint) => {
+    const loc = await location({ biometric_hint: hint });
+    expect(loc.origin + loc.pathname).toBe(`${WEB}/oauth/authorize`);
+    expect([...loc.searchParams.keys()].sort()).toEqual(['biometric_hint', 'request_id']);
+    expect(loc.searchParams.get('biometric_hint')).toBe(hint);
+  });
+
+  it.each([['retina'], [''], ['FACEID'], ['faceid&redirect_uri=https://evil.test']])('未知值 %j → Location 只有 request_id', async (hint) => {
+    const loc = await location({ biometric_hint: hint });
+    expect([...loc.searchParams.keys()]).toEqual(['request_id']);
+    expect(loc.search).not.toContain('retina');
+    expect(loc.search).not.toContain('evil');
+  });
+
+  it('沒帶時只有 request_id；其他參數（state、prompt、redirect_uri、scope）不漏進 Location', async () => {
+    const loc = await location({ prompt: 'consent', biometric_hint: 'faceid' });
+    expect([...loc.searchParams.keys()].sort()).toEqual(['biometric_hint', 'request_id']);
+    expect(loc.search).not.toMatch(/st-1|x\.com|openid|consent|challenge/);
+    const plain = await location({ prompt: 'consent' });
+    expect([...plain.searchParams.keys()]).toEqual(['request_id']);
+  });
+});

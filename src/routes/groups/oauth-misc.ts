@@ -37,7 +37,7 @@ export function registerOauthMiscRoutes(app: OpenAPIHono<AppEnv>): void {
     docs: { responses: { 200: { description: 'OIDC Discovery metadata', schema: OauthMisc_OpenIdConfiguration } } } });
   legacyRoute(app, { method: 'get', path: '/api/oauth/authorize', auth: 'none', handler: authorizeGet, summary: '第三方授權入口（存 AuthRequest 並導向 web）',
     docs: { query: OauthMisc_AuthorizeQuery, responses: {
-      302: { description: '通過驗證：Location 為 `${WEB_ORIGIN}/oauth/authorize?request_id=<id>`；可導回 client 的驗證錯誤：Location 為 redirect_uri?error=...&error_description=...&state=...（無 JSON 內容）' },
+      302: { description: '通過驗證：Location 為 `${WEB_ORIGIN}/oauth/authorize?request_id=<id>`（biometric_hint 為白名單值時多帶 `&biometric_hint=<值>`，僅顯示用）；可導回 client 的驗證錯誤：Location 為 redirect_uri?error=...&error_description=...&state=...（無 JSON 內容）' },
       400: oerr('client／redirect_uri 有問題（不可導回 client）；mobile client（tripline-mobile／-uat／-dev）與環境或精確 callback 不符（unauthorized_client）；或 WEB_ORIGIN／PUBLIC_ORIGIN 未設定（server_error）'),
     } } });
   legacyRoute(app, { method: 'get', path: '/api/oauth/authorize/requests/:id', auth: 'required', handler: authRequestGet, summary: '授權請求的同意畫面資料',

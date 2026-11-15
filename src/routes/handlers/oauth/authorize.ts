@@ -9,6 +9,7 @@
  *      302 到 `${WEB_ORIGIN}/oauth/authorize?request_id=<id>`（WEB_ORIGIN 缺省用 PUBLIC_ORIGIN；都沒有 → 400）。
  *   3. 登入、同意頁由 web 負責，經 `/api/oauth/authorize/requests/:id`（見 authorize-requests.ts）完成。
  * 網址只帶不透明的 request_id：redirect_uri 等參數都留在 server 端，web 無法竄改。
+ * 例外：biometric_hint 為白名單值時一併帶上（登入前就要決定是否顯示專門鈕，此時讀不到需 bearer 的 GET requests/:id；僅顯示用）。
  */
 import { D1Adapter } from '../../../lib/oauth-d1-adapter';
 import { validateAuthorizeRequest, type ClientAppRow } from '../../../lib/oauth-server/validate-authorize-request';
@@ -95,6 +96,8 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     return oauthErrorResponse('server_error', 'WEB_ORIGIN／PUBLIC_ORIGIN 未設定，無法導向授權畫面', 400);
   }
 
+  const hintParam = params.get('biometric_hint') ?? '';
+  const biometricHint = (BIOMETRIC_HINTS as readonly string[]).includes(hintParam) ? (hintParam as BiometricHint) : null;
   const requestId = generateOpaqueToken(32);
   const payload: AuthRequestPayload = {
     client_id: result.client.client_id,
@@ -104,13 +107,12 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     code_challenge: result.codeChallenge,
     code_challenge_method: result.codeChallengeMethod,
     prompt: result.prompt,
-    biometric_hint: (BIOMETRIC_HINTS as readonly string[]).includes(params.get('biometric_hint') ?? '')
-      ? (params.get('biometric_hint') as BiometricHint) : null,
+    biometric_hint: biometricHint,
   };
   await new D1Adapter(context.env.DB, 'AuthRequest').upsert(requestId, payload, AUTH_REQUEST_TTL_SEC);
 
   return new Response(null, {
     status: 302,
-    headers: { Location: `${origin}/oauth/authorize?request_id=${encodeURIComponent(requestId)}` },
+    headers: { Location: `${origin}/oauth/authorize?request_id=${encodeURIComponent(requestId)}${biometricHint ? `&biometric_hint=${biometricHint}` : ''}` },
   });
 };

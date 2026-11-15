@@ -13,7 +13,7 @@
  */
 import { D1Adapter } from '../../../lib/oauth-d1-adapter';
 import { validateAuthorizeRequest, type ClientAppRow } from '../../../lib/oauth-server/validate-authorize-request';
-import { buildClientRedirect } from '../../../lib/oauth-single-use';
+import { buildClientRedirect, isBiometricIntent, type BiometricIntent } from '../../../lib/oauth-single-use';
 import { generateOpaqueToken } from '../../../lib/utils';
 import { oauthErrorResponse } from '../../../errors';
 import { MOBILE_GATE_MESSAGE, isMobileClientId, mobileClientAllowed } from '../../../lib/mobile-oauth';
@@ -34,18 +34,19 @@ export interface AuthRequestPayload {
   /** App 發起授權時帶的生物辨識提示（白名單；沒帶或未知值＝null，代表不是新版 App 發起）。 */
   biometric_hint?: BiometricHint | null;
   /** 登入後記下的意圖與設定者；批准時只有同一位使用者才生效（見 authorize-requests.ts）。 */
-  intent?: 'enable' | 'disable' | null;
+  intent?: BiometricIntent | null;
   intent_user_id?: string | null;
   /** 重新驗證模式（prompt=login + biometric_intent + expected_account 皆有效）：App 帶的意圖與 App 目前帳號（id_token sub）。 */
-  reauth_intent?: 'enable' | 'disable' | null;
+  reauth_intent?: BiometricIntent | null;
   expected_account?: string | null;
 }
 
 /** expected_account 是 App 目前帳號的 user id（id_token 的 sub）：只收單純字元、長度有限。 */
-export const EXPECTED_ACCOUNT_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const EXPECTED_ACCOUNT_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 export const BIOMETRIC_HINTS = ['faceid', 'touchid', 'generic'] as const;
 export type BiometricHint = (typeof BIOMETRIC_HINTS)[number];
+const isBiometricHint = (v: unknown): v is BiometricHint => (BIOMETRIC_HINTS as readonly unknown[]).includes(v);
 
 /** 網頁端 origin：WEB_ORIGIN 優先，缺省用 PUBLIC_ORIGIN；都沒有則 null。 */
 function webOrigin(env: Env): string | null {
@@ -104,7 +105,7 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
 
   // 重新驗證：只有 prompt=login 且 biometric_intent 為白名單值才成立，此時 expected_account 必須合法（否則 fail-closed，不建請求）
   const intentParam = params.get('biometric_intent');
-  const reauthIntent = result.prompt === 'login' && (intentParam === 'enable' || intentParam === 'disable') ? intentParam : null;
+  const reauthIntent = result.prompt === 'login' && isBiometricIntent(intentParam) ? intentParam : null;
   const expectedAccount = params.get('expected_account') ?? '';
   if (reauthIntent && !EXPECTED_ACCOUNT_RE.test(expectedAccount)) {
     return new Response(null, {
@@ -114,7 +115,7 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
   }
 
   const hintParam = params.get('biometric_hint') ?? '';
-  const biometricHint = (BIOMETRIC_HINTS as readonly string[]).includes(hintParam) ? (hintParam as BiometricHint) : null;
+  const biometricHint = isBiometricHint(hintParam) ? hintParam : null;
   const requestId = generateOpaqueToken(32);
   const payload: AuthRequestPayload = {
     client_id: result.client.client_id,
@@ -129,8 +130,9 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
   };
   await new D1Adapter(context.env.DB, 'AuthRequest').upsert(requestId, payload, AUTH_REQUEST_TTL_SEC);
 
-  return new Response(null, {
-    status: 302,
-    headers: { Location: `${origin}/oauth/authorize?request_id=${encodeURIComponent(requestId)}${biometricHint ? `&biometric_hint=${biometricHint}` : ''}${reauthIntent ? `&reauth=${reauthIntent}` : ''}` },
-  });
+  const location = new URL('/oauth/authorize', origin);
+  location.searchParams.set('request_id', requestId);
+  if (biometricHint) location.searchParams.set('biometric_hint', biometricHint);
+  if (reauthIntent) location.searchParams.set('reauth', reauthIntent);
+  return new Response(null, { status: 302, headers: { Location: location.toString() } });
 };

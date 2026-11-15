@@ -22,7 +22,7 @@ import { MOBILE_GATE_MESSAGE, mobileClientAllowed } from '../../../lib/mobile-oa
 import { recordAuthEvent } from '../../../lib/auth-audit';
 import { D1Adapter } from '../../../lib/oauth-d1-adapter';
 import { validateAuthorizeRequest, type ClientAppRow } from '../../../lib/oauth-server/validate-authorize-request';
-import { buildClientRedirect, takeOnce } from '../../../lib/oauth-single-use';
+import { buildClientRedirect, isBiometricIntent, takeOnce } from '../../../lib/oauth-single-use';
 import { generateOpaqueToken, getAuth } from '../../../lib/utils';
 import type { Env } from '../../../env';
 import type { AuthRequestPayload } from './authorize';
@@ -115,7 +115,7 @@ export const onRequestPostIntent: PagesFunction<Env> = async (context) => {
   if (existing && (existing as AuthRequestPayload).reauth_intent) throw new AppError('DATA_VALIDATION', '重新驗證請求的意圖由 App 決定，不可變更');
   const body = (await context.request.json().catch(() => null)) as { intent?: unknown } | null;
   const intent = body?.intent;
-  if (intent !== 'enable' && intent !== 'disable' && intent !== null) throw new AppError('DATA_VALIDATION', 'intent 必須是 enable、disable 或 null');
+  if (intent !== null && !isBiometricIntent(intent)) throw new AppError('DATA_VALIDATION', 'intent 必須是 enable、disable 或 null');
   const res = await context.env.DB
     .prepare("UPDATE oauth_models SET payload = json_set(payload, '$.intent', ?, '$.intent_user_id', ?) WHERE name = 'AuthRequest' AND id = ? AND expires_at >= ?")
     .bind(intent, intent === null ? null : userId, id, Date.now())
@@ -194,9 +194,10 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
 
   return reply(buildClientRedirect(validated.redirectUri, {
     code, state: validated.state,
-    // 旗標只由 server 依存下的意圖決定：必須是白名單值，且設定者就是目前批准的使用者
+    // 旗標只由 server 依存下的意圖決定：重新驗證模式用 authorize 時已驗過的 reauth_intent；
+    // 一般模式必須是白名單值，且設定者就是目前批准的使用者
     biometricIntent: req.reauth_intent
-      ? (req.reauth_intent === 'enable' || req.reauth_intent === 'disable' ? req.reauth_intent : undefined)
-      : (req.intent === 'enable' || req.intent === 'disable') && req.intent_user_id === userId ? req.intent : undefined,
+      ? req.reauth_intent
+      : isBiometricIntent(req.intent) && req.intent_user_id === userId ? req.intent : undefined,
   }));
 };

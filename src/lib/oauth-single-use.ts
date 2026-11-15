@@ -16,10 +16,14 @@ export async function takeOnce(db: D1Database, name: string, id: string): Promis
   return (res.meta?.changes ?? 0) === 1 ? found : undefined;
 }
 
+export const BIOMETRIC_INTENTS = ['enable', 'disable'] as const;
+export type BiometricIntent = (typeof BIOMETRIC_INTENTS)[number];
+export const isBiometricIntent = (v: unknown): v is BiometricIntent => (BIOMETRIC_INTENTS as readonly unknown[]).includes(v);
+
 /** 把 code／error／state（與 server 決定的 biometric_intent）加到 redirect_uri 的 query（原有的 code／error 先清掉，其餘 query 保留）。 */
 export function buildClientRedirect(
   redirectUri: string,
-  params: { code?: string; error?: string; errorDescription?: string; state?: string | null; biometricIntent?: 'enable' | 'disable' },
+  params: { code?: string; error?: string; errorDescription?: string; state?: string | null; biometricIntent?: BiometricIntent },
 ): string {
   const url = new URL(redirectUri);
   url.searchParams.delete('code');

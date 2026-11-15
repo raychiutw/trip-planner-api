@@ -11,42 +11,13 @@
  * 網址只帶不透明的 request_id：redirect_uri 等參數都留在 server 端，web 無法竄改。
  * 例外：biometric_hint 為白名單值時一併帶上（登入前就要決定是否顯示專門鈕，此時讀不到需 bearer 的 GET requests/:id；僅顯示用）。
  */
-import { D1Adapter } from '../../../lib/oauth-d1-adapter';
-import { validateAuthorizeRequest, type ClientAppRow } from '../../../lib/oauth-server/validate-authorize-request';
-import { buildClientRedirect, isBiometricIntent, type BiometricIntent } from '../../../lib/oauth-single-use';
-import { generateOpaqueToken } from '../../../lib/utils';
+import { buildAuthRequestPayload, createAuthRequest, parseReauth } from '../../../lib/auth-request';
+import { loadClientApp, validateAuthorizeRequest, type ClientAppRow } from '../../../lib/oauth-server/validate-authorize-request';
+import { PARAM_BIOMETRIC_HINT, PARAM_BIOMETRIC_INTENT, PARAM_EXPECTED_ACCOUNT, PARAM_REAUTH, PROMPT_LOGIN, REAUTH_LOGIN, isBiometricHint } from '../../../lib/oauth-contract';
+import { buildClientRedirect } from '../../../lib/oauth-redirect';
 import { oauthErrorResponse } from '../../../errors';
 import { MOBILE_GATE_MESSAGE, isMobileClientId, mobileClientAllowed } from '../../../lib/mobile-oauth';
 import type { Env } from '../../../env';
-
-export const AUTH_REQUEST_TTL_SEC = 10 * 60;
-
-/** AuthRequest 的內容：驗過的參數（consent 與 code 都只信這份，不信 web 傳入的值）。 */
-export interface AuthRequestPayload {
-  [key: string]: unknown;
-  client_id: string;
-  redirect_uri: string;
-  scopes: string[];
-  state: string | null;
-  code_challenge: string | null;
-  code_challenge_method: 'S256' | null;
-  prompt: string | null;
-  /** App 發起授權時帶的生物辨識提示（白名單；沒帶或未知值＝null，代表不是新版 App 發起）。 */
-  biometric_hint?: BiometricHint | null;
-  /** 登入後記下的意圖與設定者；批准時只有同一位使用者才生效（見 authorize-requests.ts）。 */
-  intent?: BiometricIntent | null;
-  intent_user_id?: string | null;
-  /** 重新驗證模式（prompt=login + biometric_intent + expected_account 皆有效）：App 帶的意圖與 App 目前帳號（id_token sub）。 */
-  reauth_intent?: BiometricIntent | null;
-  expected_account?: string | null;
-}
-
-/** expected_account 是 App 目前帳號的 user id（id_token 的 sub）：只收單純字元、長度有限。 */
-const EXPECTED_ACCOUNT_RE = /^[A-Za-z0-9_-]{1,64}$/;
-
-export const BIOMETRIC_HINTS = ['faceid', 'touchid', 'generic'] as const;
-export type BiometricHint = (typeof BIOMETRIC_HINTS)[number];
-const isBiometricHint = (v: unknown): v is BiometricHint => (BIOMETRIC_HINTS as readonly unknown[]).includes(v);
 
 /** 網頁端 origin：WEB_ORIGIN 優先，缺省用 PUBLIC_ORIGIN；都沒有則 null。 */
 function webOrigin(env: Env): string | null {
@@ -78,13 +49,7 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     return oauthErrorResponse('unauthorized_client', MOBILE_GATE_MESSAGE, 400);
   }
 
-  let client: ClientAppRow | null = null;
-  if (req.client_id) {
-    client = await context.env.DB
-      .prepare('SELECT client_id, client_type, app_name, redirect_uris, allowed_scopes, status FROM client_apps WHERE client_id = ?')
-      .bind(req.client_id)
-      .first<ClientAppRow>();
-  }
+  const client: ClientAppRow | null = req.client_id ? await loadClientApp(context.env.DB, req.client_id) : null;
 
   const result = validateAuthorizeRequest(req, client);
   if ('code' in result && 'redirectableToClient' in result) {
@@ -104,37 +69,26 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
   }
 
   // 重新驗證：只有 prompt=login 且 biometric_intent 為白名單值才成立，此時 expected_account 必須合法（否則 fail-closed，不建請求）
-  const intentParam = params.get('biometric_intent');
-  const reauthIntent = result.prompt === 'login' && isBiometricIntent(intentParam) ? intentParam : null;
-  const expectedAccount = params.get('expected_account') ?? '';
-  if (reauthIntent && !EXPECTED_ACCOUNT_RE.test(expectedAccount)) {
+  const reauth = parseReauth(result.prompt, params.get(PARAM_BIOMETRIC_INTENT), params.get(PARAM_EXPECTED_ACCOUNT));
+  if (reauth.kind === 'invalid_account') {
     return new Response(null, {
       status: 302,
       headers: { Location: buildClientRedirect(result.redirectUri, { error: 'invalid_request', errorDescription: 'expected_account 缺少或格式不正確', state: result.state }) },
     });
   }
 
-  const hintParam = params.get('biometric_hint') ?? '';
+  const hintParam = params.get(PARAM_BIOMETRIC_HINT) ?? '';
   const biometricHint = isBiometricHint(hintParam) ? hintParam : null;
-  const requestId = generateOpaqueToken(32);
-  const payload: AuthRequestPayload = {
-    client_id: result.client.client_id,
-    redirect_uri: result.redirectUri,
-    scopes: result.scopes,
-    state: result.state,
-    code_challenge: result.codeChallenge,
-    code_challenge_method: result.codeChallengeMethod,
-    prompt: result.prompt,
-    biometric_hint: biometricHint,
-    ...(reauthIntent ? { reauth_intent: reauthIntent, expected_account: expectedAccount } : {}),
-  };
-  await new D1Adapter(context.env.DB, 'AuthRequest').upsert(requestId, payload, AUTH_REQUEST_TTL_SEC);
+  const requestId = await createAuthRequest(context.env.DB, buildAuthRequestPayload(result, {
+    biometricHint,
+    reauth: reauth.kind === 'reauth' ? reauth : null,
+  }));
 
   const location = new URL('/oauth/authorize', origin);
   location.searchParams.set('request_id', requestId);
-  if (biometricHint) location.searchParams.set('biometric_hint', biometricHint);
-  // 單獨 prompt=login 也要 web 強制顯示登入表單：reauth=login（值只來自白名單 enable|disable|login）
-  const reauthParam = reauthIntent ?? (result.prompt === 'login' ? 'login' : null);
-  if (reauthParam) location.searchParams.set('reauth', reauthParam);
+  if (biometricHint) location.searchParams.set(PARAM_BIOMETRIC_HINT, biometricHint);
+  // 單獨 prompt=login 也要 web 強制顯示登入表單：reauth=login（值只來自 REAUTH_MODES 白名單）
+  const reauthParam = (reauth.kind === 'reauth' ? reauth.intent : null) ?? (result.prompt === PROMPT_LOGIN ? REAUTH_LOGIN : null);
+  if (reauthParam) location.searchParams.set(PARAM_REAUTH, reauthParam);
   return new Response(null, { status: 302, headers: { Location: location.toString() } });
 };

@@ -4,6 +4,7 @@
  * 其餘（AppError 丟出的）是共用的巢狀 ApiError。兩種都依 handler 實際行為標註在各路由。
  */
 import { z } from '@hono/zod-openapi';
+import { BIOMETRIC_BUTTON_HINTS, BIOMETRIC_HINTS, BIOMETRIC_INTENTS } from '../lib/oauth-contract';
 
 /** RFC 6749／7009 的扁平錯誤（oauthErrorResponse；revoke 的 429 也是同形狀）。 */
 export const OauthMisc_OAuthError = z.object({
@@ -52,8 +53,8 @@ export const OauthMisc_AuthorizeQuery = z.object({
   code_challenge: z.string().optional(),
   code_challenge_method: z.string().optional().openapi({ example: 'S256' }),
   prompt: z.string().optional(),
-  biometric_hint: z.string().optional().openapi({ description: 'App 發起授權時帶：faceid｜touchid｜generic；其他值當作沒帶' }),
-  biometric_intent: z.string().optional().openapi({ description: '重新驗證模式（需 prompt=login 與 expected_account）：enable｜disable；其他值當作沒帶' }),
+  biometric_hint: z.enum(BIOMETRIC_HINTS).optional().openapi({ description: 'App 發起授權時帶；其他值當作沒帶' }),
+  biometric_intent: z.enum(BIOMETRIC_INTENTS).optional().openapi({ description: '重新驗證模式（需 prompt=login 與 expected_account）；其他值當作沒帶' }),
   expected_account: z.string().optional().openapi({ description: 'App 目前帳號的 user id（id_token 的 sub），1～64 字元 [A-Za-z0-9_-]；有 biometric_intent 時必填，缺少或格式不符回 invalid_request' }),
 });
 
@@ -63,11 +64,11 @@ export const OauthMisc_AuthRequestInfo = z.object({
   needs_consent: z.boolean(),
   expires_at: z.string().openapi({ description: 'ISO 8601' }),
   from_app: z.boolean().openapi({ description: 'App 以 biometric_hint 發起的授權為 true；舊版 App 與一般請求為 false' }),
-  biometric_hint: z.enum(['faceid', 'touchid']).nullable().openapi({ description: '按鈕名稱提示；generic、未帶、未知值皆為 null' }),
+  biometric_hint: z.enum(BIOMETRIC_BUTTON_HINTS).nullable().openapi({ description: '按鈕名稱提示；generic、未帶、未知值皆為 null' }),
 }).openapi('OauthMisc_AuthRequestInfo');
 
 export const OauthMisc_AuthRequestIntentBody = z.object({
-  intent: z.enum(['enable', 'disable']).nullable().openapi({ description: 'null 清除意圖' }),
+  intent: z.enum(BIOMETRIC_INTENTS).nullable().openapi({ description: 'null 清除意圖' }),
 });
 
 /** approve／deny 的結果：一律是 server 端存的已驗證 redirect_uri 加上 code 或 error 參數。 */

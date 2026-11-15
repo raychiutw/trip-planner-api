@@ -13,8 +13,8 @@
  */
 import { buildAuthRequestPayload, createAuthRequest, parseReauth } from '../../../lib/auth-request';
 import { loadClientApp, validateAuthorizeRequest, type ClientAppRow } from '../../../lib/oauth-server/validate-authorize-request';
-import { PARAM_BIOMETRIC_HINT, PARAM_BIOMETRIC_INTENT, PARAM_REAUTH, REAUTH_LOGIN, isBiometricHint } from '../../../lib/oauth-contract';
-import { buildClientRedirect } from '../../../lib/oauth-single-use';
+import { PARAM_BIOMETRIC_HINT, PARAM_BIOMETRIC_INTENT, PARAM_EXPECTED_ACCOUNT, PARAM_REAUTH, PROMPT_LOGIN, REAUTH_LOGIN, isBiometricHint } from '../../../lib/oauth-contract';
+import { buildClientRedirect } from '../../../lib/oauth-redirect';
 import { oauthErrorResponse } from '../../../errors';
 import { MOBILE_GATE_MESSAGE, isMobileClientId, mobileClientAllowed } from '../../../lib/mobile-oauth';
 import type { Env } from '../../../env';
@@ -69,7 +69,7 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
   }
 
   // 重新驗證：只有 prompt=login 且 biometric_intent 為白名單值才成立，此時 expected_account 必須合法（否則 fail-closed，不建請求）
-  const reauth = parseReauth(result.prompt, params.get(PARAM_BIOMETRIC_INTENT), params.get('expected_account'));
+  const reauth = parseReauth(result.prompt, params.get(PARAM_BIOMETRIC_INTENT), params.get(PARAM_EXPECTED_ACCOUNT));
   if (reauth.kind === 'invalid_account') {
     return new Response(null, {
       status: 302,
@@ -88,7 +88,7 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
   location.searchParams.set('request_id', requestId);
   if (biometricHint) location.searchParams.set(PARAM_BIOMETRIC_HINT, biometricHint);
   // 單獨 prompt=login 也要 web 強制顯示登入表單：reauth=login（值只來自 REAUTH_MODES 白名單）
-  const reauthParam = (reauth.kind === 'reauth' ? reauth.intent : null) ?? (result.prompt === 'login' ? REAUTH_LOGIN : null);
+  const reauthParam = (reauth.kind === 'reauth' ? reauth.intent : null) ?? (result.prompt === PROMPT_LOGIN ? REAUTH_LOGIN : null);
   if (reauthParam) location.searchParams.set(PARAM_REAUTH, reauthParam);
   return new Response(null, { status: 302, headers: { Location: location.toString() } });
 };

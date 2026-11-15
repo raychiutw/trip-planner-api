@@ -132,6 +132,16 @@ describe('approve 的導回網址', () => {
     expect(loc.searchParams.get('state')).toBe('st-1');
   });
 
+  it('意圖欄位只收白名單：授權請求 payload 被塞進奇怪值，經 approve 導回網址也不會出現（守住決策結果接上導回網址的接線）', async () => {
+    const id = await start();
+    await db.prepare("UPDATE oauth_models SET payload = json_set(payload, '$.intent', ?, '$.intent_user_id', ?) WHERE name = 'AuthRequest' AND id = ?")
+      .bind('https://evil.test&x=1', userIdFor(EMAIL), id).run();
+    const loc = await approve(id);
+    expect(loc.searchParams.has('biometric_intent')).toBe(false);
+    expect(loc.href).not.toContain('evil');
+    expect([...loc.searchParams.keys()].sort()).toEqual(['code', 'state']);
+  });
+
   it('已註冊的 redirect_uri 自帶同名參數 → 沒有意圖時被清掉，有意圖時以 server 為準', async () => {
     const none = await approve(await start({ redirect_uri: CB_FLAGGED }));
     expect(none.searchParams.has('biometric_intent')).toBe(false);

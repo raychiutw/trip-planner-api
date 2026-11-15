@@ -20,7 +20,8 @@ export type BiometricIntent = (typeof BIOMETRIC_INTENTS)[number];
 export const isBiometricIntent = (v: unknown): v is BiometricIntent => (BIOMETRIC_INTENTS as readonly unknown[]).includes(v);
 
 /** web 授權頁網址的 reauth 值：兩種意圖，加上單獨 prompt=login 的 'login'。 */
-export const REAUTH_LOGIN = 'login' as const;
+export const PROMPT_LOGIN = 'login' as const; // OIDC prompt 值：強制重新輸入密碼
+export const REAUTH_LOGIN = PROMPT_LOGIN;
 export const REAUTH_MODES = [...BIOMETRIC_INTENTS, REAUTH_LOGIN] as const;
 export type ReauthMode = (typeof REAUTH_MODES)[number];
 
@@ -31,11 +32,13 @@ export const REAUTH_ACCOUNT_MISMATCH = 'reauth_account_mismatch' as const;
 export const PARAM_BIOMETRIC_HINT = 'biometric_hint' as const;
 export const PARAM_BIOMETRIC_INTENT = 'biometric_intent' as const;
 export const PARAM_REAUTH = 'reauth' as const;
+export const PARAM_EXPECTED_ACCOUNT = 'expected_account' as const;
 
 /**
  * 登入碼（/api/oauth/login 簽發）的兩個約定，重新驗證的「剛用密碼登入」檢查依賴它們：
  * 1. TTL：登入碼換成 token 後仍留在 oauth_models 到期，新鮮度視窗就是這個秒數。
  * 2. redirect_uri 為 null：第一方直接換 code、沒有跳轉；一般授權碼一定有 redirect_uri，靠它區分兩者。
+ * 檢查本體在 lib/oauth-server/fresh-login.ts（SQL 寫死 IS NULL 對應第 2 點），簽發端在 routes/login.ts。
  */
 export const LOGIN_CODE_TTL_SEC = 60;
 export const LOGIN_CODE_REDIRECT_URI = null;

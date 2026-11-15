@@ -7,6 +7,7 @@ import { createTestDb, disposeMiniflare } from './setup';
 import { mockEnv, userIdFor } from './helpers';
 import { createApi, type Api } from './http';
 import { D1Adapter } from '../../src/lib/oauth-d1-adapter';
+import { peekAuthRequest } from '../../src/lib/auth-request';
 import type { Env } from '../../src/env';
 
 const CLIENT = 'h2-reauth-partner';
@@ -67,10 +68,14 @@ describe('302 Location 的 reauth（顯示用）', () => {
     expect(loc.search).not.toContain(userIdFor(EMAIL));
   });
 
-  it('單獨 prompt=login（沒有意圖、沒有 expected_account）→ reauth=login（不記 reauth_intent 由 auth-request 測試與下方「不比對帳號」守門）', async () => {
+  it('單獨 prompt=login（沒有意圖、沒有 expected_account）→ reauth=login，授權請求不記 reauth_intent／expected_account', async () => {
     const loc = await location({ prompt: 'login' });
     expect([...loc.searchParams.keys()].sort()).toEqual(['reauth', 'request_id']);
     expect(loc.searchParams.get('reauth')).toBe('login');
+    const payload = (await peekAuthRequest(db, loc.searchParams.get('request_id')!))!.payload;
+    expect(payload.prompt).toBe('login');
+    expect(payload.reauth_intent ?? null).toBeNull();
+    expect(payload.expected_account ?? null).toBeNull();
   });
 
   it('單獨 prompt=login 帶了未知意圖／expected_account → 仍只有 reauth=login，網址不含其值', async () => {

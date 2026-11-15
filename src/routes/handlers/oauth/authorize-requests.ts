@@ -24,9 +24,10 @@ import { recordAuthEvent } from '../../../lib/auth-audit';
 import { D1Adapter } from '../../../lib/oauth-d1-adapter';
 import { loadClientApp, revalidateStoredRequest } from '../../../lib/oauth-server/validate-authorize-request';
 import { decideApproval, requiresFreshLogin } from '../../../lib/oauth-server/approve-decision';
+import { isFreshPasswordLogin } from '../../../lib/oauth-server/fresh-login';
 import { peekAuthRequest, setAuthRequestIntent, takeAuthRequest } from '../../../lib/auth-request';
 import { REAUTH_ACCOUNT_MISMATCH, isBiometricButtonHint } from '../../../lib/oauth-contract';
-import { buildClientRedirect } from '../../../lib/oauth-single-use';
+import { buildClientRedirect } from '../../../lib/oauth-redirect';
 import { generateOpaqueToken, getAuth } from '../../../lib/utils';
 import type { Env } from '../../../env';
 
@@ -41,22 +42,6 @@ function requireUserId(context: { data: unknown }): string {
   if (!auth) throw new AppError('AUTH_REQUIRED');
   if (!auth.userId) throw new AppError('PERM_DENIED', '授權需要使用者身份');
   return auth.userId;
-}
-
-/**
- * 這個 bearer 是否「剛用密碼登入」得到的：/api/oauth/login 簽的 code（redirect_uri 為 null、TTL 為 LOGIN_CODE_TTL_SEC）
- * 在換成 token 後仍留在 oauth_models 到期，且 grantId 與 bearer 相同。refresh 還原的登入沿用舊 grantId，
- * 而該 code 早已過期被清，所以還原的舊登入通過不了。不需要 schema 變更。
- * 限制：登入後 LOGIN_CODE_TTL_SEC 秒內才能批准；超過要重新輸入密碼。
- */
-export async function isFreshPasswordLogin(db: D1Database, grantId: string | undefined): Promise<boolean> {
-  if (!grantId) return false;
-  // SQL 的 IS NULL 對應 LOGIN_CODE_REDIRECT_URI（null）；由 tests/oauth-contract.test.ts 守門
-  const row = await db
-    .prepare("SELECT 1 AS x FROM oauth_models WHERE name = 'AuthorizationCode' AND json_extract(payload, '$.grantId') = ? AND json_extract(payload, '$.redirect_uri') IS NULL AND expires_at >= ?")
-    .bind(grantId, Date.now())
-    .first();
-  return !!row;
 }
 
 export const onRequestGet: PagesFunction<Env> = async (context) => {
@@ -100,7 +85,8 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
 
   // 重新驗證模式與單獨 prompt=login 要求剛密碼登入：先確認，不燒掉請求，讓使用者重新登入後可再批准
   const peeked = decision === 'approve' ? (await peekAuthRequest(DB, params.id ?? ''))?.payload : undefined;
-  const freshLogin = !peeked || !requiresFreshLogin(peeked) || (await isFreshPasswordLogin(DB, getAuth(context)?.grantId));
+  // 不需要新鮮度（一般授權、deny、請求已不存在）時視為通過，不查資料庫
+  const freshLogin = peeked && requiresFreshLogin(peeked) ? await isFreshPasswordLogin(DB, getAuth(context)?.grantId) : true;
   if (peeked && decideApproval({ decision, req: peeked, userId, freshLogin }).kind === 'reauth_required') throw new AppError('OAUTH_REAUTH_REQUIRED');
 
   // 先搶佔刪除：贏家才繼續（單次使用）
@@ -135,7 +121,7 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
     }, context.env);
     return reply(buildClientRedirect(validated.redirectUri, { error: REAUTH_ACCOUNT_MISMATCH, state: validated.state }));
   }
-  // reauth_required 已在搶佔前攔下（freshLogin 兩次相同）；這裡只可能是 approve
+  // reauth_required 已在搶佔前攔下（同一個 freshLogin、同一份請求），正常走不到；保留作為型別收斂與 fail-closed 防線
   if (outcome.kind !== 'approve') throw new AppError('OAUTH_REAUTH_REQUIRED');
 
   // approve：寫入同意（驗過的 scopes，同 key 覆寫）→ 發 authorization code

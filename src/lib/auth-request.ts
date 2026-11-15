@@ -9,7 +9,7 @@
  * - setIntent 是條件式 UPDATE：請求已被 take 或過期就不會被復活。
  */
 import { D1Adapter } from './oauth-d1-adapter';
-import { isBiometricIntent, type BiometricHint, type BiometricIntent } from './oauth-contract';
+import { PROMPT_LOGIN, isBiometricIntent, type BiometricHint, type BiometricIntent } from './oauth-contract';
 import type { ValidatedRequest } from './oauth-server/validate-authorize-request';
 import { generateOpaqueToken } from './utils';
 
@@ -54,7 +54,7 @@ export type ReauthParams =
  * 否則 invalid_account（fail-closed，呼叫端不建請求）。其餘一律 none。
  */
 export function parseReauth(prompt: string | null, intentParam: string | null, expectedAccountParam: string | null): ReauthParams {
-  if (prompt !== 'login' || !isBiometricIntent(intentParam)) return { kind: 'none' };
+  if (prompt !== PROMPT_LOGIN || !isBiometricIntent(intentParam)) return { kind: 'none' };
   const expectedAccount = expectedAccountParam ?? '';
   return EXPECTED_ACCOUNT_RE.test(expectedAccount) ? { kind: 'reauth', intent: intentParam, expectedAccount } : { kind: 'invalid_account' };
 }

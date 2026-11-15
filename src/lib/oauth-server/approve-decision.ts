@@ -8,7 +8,7 @@
  * - 重新驗證模式的批准者必須是 expected_account，否則 account_mismatch（不發 code）；單獨 prompt=login 不比對帳號。
  * - 旗標只由 server 決定：reauth 模式用 reauth_intent；一般模式必須是白名單值且設定者就是批准者。
  */
-import { isBiometricIntent, type BiometricIntent } from '../oauth-contract';
+import { PROMPT_LOGIN, isBiometricIntent, type BiometricIntent } from '../oauth-contract';
 import type { AuthRequestPayload } from '../auth-request';
 
 export type ApprovalDecision =
@@ -18,7 +18,7 @@ export type ApprovalDecision =
   | { kind: 'approve'; biometricIntent: BiometricIntent | undefined };
 
 /** 批准這個請求是否要求「剛用密碼登入」。 */
-export const requiresFreshLogin = (req: AuthRequestPayload): boolean => !!req.reauth_intent || req.prompt === 'login';
+export const requiresFreshLogin = (req: AuthRequestPayload): boolean => !!req.reauth_intent || req.prompt === PROMPT_LOGIN;
 
 export function decideApproval(input: { decision: 'approve' | 'deny'; req: AuthRequestPayload; userId: string; freshLogin: boolean }): ApprovalDecision {
   const { decision, req, userId, freshLogin } = input;

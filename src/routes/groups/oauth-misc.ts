@@ -1,7 +1,7 @@
 import { z } from '@hono/zod-openapi';
 import type { OpenAPIHono } from '@hono/zod-openapi';
 import type { AppEnv } from '../../env';
-import { BIOMETRIC_INTENTS, PARAM_BIOMETRIC_HINT, PARAM_BIOMETRIC_INTENT, PARAM_REAUTH, REAUTH_ACCOUNT_MISMATCH, REAUTH_LOGIN } from '../../lib/oauth-contract';
+import { BIOMETRIC_INTENTS, PARAM_BIOMETRIC_HINT, PARAM_BIOMETRIC_INTENT, PARAM_REAUTH, PARAM_THEME, REAUTH_ACCOUNT_MISMATCH, REAUTH_LOGIN } from '../../lib/oauth-contract';
 import { legacyRoute } from '../../legacy';
 import { ApiError } from '../../schemas/common';
 import {
@@ -38,7 +38,7 @@ export function registerOauthMiscRoutes(app: OpenAPIHono<AppEnv>): void {
     docs: { responses: { 200: { description: 'OIDC Discovery metadata', schema: OauthMisc_OpenIdConfiguration } } } });
   legacyRoute(app, { method: 'get', path: '/api/oauth/authorize', auth: 'none', handler: authorizeGet, summary: '第三方授權入口（存 AuthRequest 並導向 web）',
     docs: { query: OauthMisc_AuthorizeQuery, responses: {
-      302: { description: `通過驗證：Location 為 \`\${WEB_ORIGIN}/oauth/authorize?request_id=<id>\`（${PARAM_BIOMETRIC_HINT} 為白名單值時多帶 \`&${PARAM_BIOMETRIC_HINT}=<值>\`；重新驗證模式多帶 \`&${PARAM_REAUTH}=${BIOMETRIC_INTENTS.join('|')}\`、單獨 \`prompt=login\` 多帶 \`&${PARAM_REAUTH}=${REAUTH_LOGIN}\`；皆僅顯示用）；可導回 client 的驗證錯誤：Location 為 redirect_uri?error=...&error_description=...&state=...（無 JSON 內容）` },
+      302: { description: `通過驗證：Location 為 \`\${WEB_ORIGIN}/oauth/authorize?request_id=<id>\`（${PARAM_BIOMETRIC_HINT} 為白名單值時多帶 \`&${PARAM_BIOMETRIC_HINT}=<值>\`；重新驗證模式多帶 \`&${PARAM_REAUTH}=${BIOMETRIC_INTENTS.join('|')}\`、單獨 \`prompt=login\` 多帶 \`&${PARAM_REAUTH}=${REAUTH_LOGIN}\`；${PARAM_THEME} 為 light／dark 時多帶 \`&${PARAM_THEME}=<值>\`；皆僅顯示用）；可導回 client 的驗證錯誤：Location 為 redirect_uri?error=...&error_description=...&state=...（無 JSON 內容）` },
       400: oerr('client／redirect_uri 有問題（不可導回 client）；mobile client（tripline-mobile／-uat／-dev）與環境或精確 callback 不符（unauthorized_client）；或 WEB_ORIGIN／PUBLIC_ORIGIN 未設定（server_error）'),
     } } });
   legacyRoute(app, { method: 'get', path: '/api/oauth/authorize/requests/:id', auth: 'required', handler: authRequestGet, summary: '授權請求的同意畫面資料',

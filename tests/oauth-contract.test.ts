@@ -10,7 +10,7 @@ import type { Env } from '../src/env';
 import { hashPassword } from '../src/lib/password';
 import {
   BIOMETRIC_BUTTON_HINTS, BIOMETRIC_HINTS, BIOMETRIC_INTENTS, LOGIN_CODE_REDIRECT_URI, LOGIN_CODE_TTL_SEC,
-  PARAM_BIOMETRIC_INTENT, REAUTH_ACCOUNT_MISMATCH, REAUTH_MODES,
+  PARAM_BIOMETRIC_INTENT, PARAM_THEME, REAUTH_ACCOUNT_MISMATCH, REAUTH_MODES, THEMES,
 } from '../src/lib/oauth-contract';
 import { isFreshPasswordLogin } from '../src/lib/oauth-server/fresh-login';
 import { createD1 } from './support/d1';
@@ -39,6 +39,8 @@ describe('契約常數的字面值（少一個值就紅）', () => {
     expect([...REAUTH_MODES]).toEqual(['enable', 'disable', 'login']);
     expect(REAUTH_ACCOUNT_MISMATCH).toBe('reauth_account_mismatch');
     expect(PARAM_BIOMETRIC_INTENT).toBe('biometric_intent');
+    expect([...THEMES]).toEqual(['light', 'dark']);
+    expect(PARAM_THEME).toBe('theme');
   });
 });
 
@@ -64,6 +66,7 @@ describe('OpenAPI 的 enum 等於契約常數', () => {
     const of = (n: string) => enumsOf(params.find((p) => p.name === n)!.schema);
     expect(of('biometric_hint')).toEqual([[...BIOMETRIC_HINTS]]);
     expect(of('biometric_intent')).toEqual([[...BIOMETRIC_INTENTS]]);
+    expect(of('theme')).toEqual([[...THEMES]]);
   });
   it('GET requests/:id 的 biometric_hint（只有按鈕提示值）', async () => {
     const s = await spec();

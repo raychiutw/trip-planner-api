@@ -4,7 +4,7 @@
  * 其餘（AppError 丟出的）是共用的巢狀 ApiError。兩種都依 handler 實際行為標註在各路由。
  */
 import { z } from '@hono/zod-openapi';
-import { BIOMETRIC_BUTTON_HINTS, BIOMETRIC_HINTS, BIOMETRIC_INTENTS } from '../lib/oauth-contract';
+import { BIOMETRIC_BUTTON_HINTS, BIOMETRIC_HINTS, BIOMETRIC_INTENTS, THEMES } from '../lib/oauth-contract';
 
 /** RFC 6749／7009 的扁平錯誤（oauthErrorResponse；revoke 的 429 也是同形狀）。 */
 export const OauthMisc_OAuthError = z.object({
@@ -55,6 +55,7 @@ export const OauthMisc_AuthorizeQuery = z.object({
   prompt: z.string().optional(),
   biometric_hint: z.enum(BIOMETRIC_HINTS).optional().openapi({ description: 'App 發起授權時帶；其他值當作沒帶' }),
   biometric_intent: z.enum(BIOMETRIC_INTENTS).optional().openapi({ description: '重新驗證模式（需 prompt=login 與 expected_account）；其他值當作沒帶' }),
+  theme: z.enum(THEMES).optional().openapi({ description: 'App 目前顯示的明暗；light／dark 會原樣帶進 web 授權頁網址，其他值或重複參數當作沒帶' }),
   expected_account: z.string().optional().openapi({ description: 'App 目前帳號的 user id（id_token 的 sub），1～64 字元 [A-Za-z0-9_-]；有 biometric_intent 時必填，缺少或格式不符回 invalid_request' }),
 });
 

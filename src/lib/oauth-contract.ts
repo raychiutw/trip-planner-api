@@ -28,10 +28,16 @@ export type ReauthMode = (typeof REAUTH_MODES)[number];
 /** 導回 App 的 error 值（也當作稽核的 failureReason）。 */
 export const REAUTH_ACCOUNT_MISMATCH = 'reauth_account_mismatch' as const;
 
+/** App 目前顯示的明暗（授權端點轉傳給 web 授權頁；其他值、重複參數一律丟棄）。 */
+export const THEMES = ['light', 'dark'] as const;
+export type Theme = (typeof THEMES)[number];
+export const isTheme = (v: unknown): v is Theme => (THEMES as readonly unknown[]).includes(v);
+
 /** 網址 query 的旗標名稱。 */
 export const PARAM_BIOMETRIC_HINT = 'biometric_hint' as const;
 export const PARAM_BIOMETRIC_INTENT = 'biometric_intent' as const;
 export const PARAM_REAUTH = 'reauth' as const;
+export const PARAM_THEME = 'theme' as const;
 export const PARAM_EXPECTED_ACCOUNT = 'expected_account' as const;
 
 /**

@@ -67,12 +67,10 @@ describe('302 Location 的 reauth（顯示用）', () => {
     expect(loc.search).not.toContain(userIdFor(EMAIL));
   });
 
-  it('單獨 prompt=login（沒有意圖、沒有 expected_account）→ reauth=login，不記 reauth_intent', async () => {
+  it('單獨 prompt=login（沒有意圖、沒有 expected_account）→ reauth=login（不記 reauth_intent 由 auth-request 測試與下方「不比對帳號」守門）', async () => {
     const loc = await location({ prompt: 'login' });
     expect([...loc.searchParams.keys()].sort()).toEqual(['reauth', 'request_id']);
     expect(loc.searchParams.get('reauth')).toBe('login');
-    const row = await db.prepare("SELECT json_extract(payload, '$.reauth_intent') AS i FROM oauth_models WHERE name = 'AuthRequest' AND id = ?").bind(loc.searchParams.get('request_id')).first<{ i: unknown }>();
-    expect(row!.i).toBeNull();
   });
 
   it('單獨 prompt=login 帶了未知意圖／expected_account → 仍只有 reauth=login，網址不含其值', async () => {
@@ -86,12 +84,10 @@ describe('302 Location 的 reauth（顯示用）', () => {
     expect([...loc.searchParams.keys()].sort()).toEqual(['biometric_hint', 'reauth', 'request_id']);
   });
 
-  it('一般授權（沒有 prompt=login）→ 只有 request_id，也不記 reauth', async () => {
+  it('一般授權（沒有 prompt=login）→ 只有 request_id', async () => {
     for (const p of [{} as Record<string, string>, { biometric_intent: 'enable', expected_account: userIdFor(EMAIL) }, { prompt: 'consent', biometric_intent: 'enable', expected_account: userIdFor(EMAIL) }]) {
       const loc = await location(p);
       expect([...loc.searchParams.keys()]).toEqual(['request_id']);
-      const row = await db.prepare("SELECT json_extract(payload, '$.reauth_intent') AS i FROM oauth_models WHERE name = 'AuthRequest' AND id = ?").bind(loc.searchParams.get('request_id')).first<{ i: unknown }>();
-      expect(row!.i).toBeNull();
     }
   });
 

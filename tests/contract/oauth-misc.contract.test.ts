@@ -8,6 +8,7 @@ import { createTestDb, disposeMiniflare } from '../baseline/setup';
 import { mockEnv, seedTrip, userIdFor, seedAiConsent } from '../baseline/helpers';
 import { createApi, type Api } from '../baseline/http';
 import { D1Adapter } from '../../src/lib/oauth-d1-adapter';
+import { createAuthRequest } from '../../src/lib/auth-request';
 import { hashPassword } from '../../src/lib/password';
 import { sha256Base64Url } from '../../src/lib/crypto';
 import { createApp } from '../../src/app';
@@ -139,9 +140,9 @@ describe('authorize／authorize requests', () => {
 
   async function putRequest(): Promise<string> {
     const id = `${P}areq-${crypto.randomUUID()}`;
-    await new D1Adapter(db, 'AuthRequest').upsert(id, {
-      client_id: CLIENT, redirect_uri: CB, scopes: ['openid', 'profile'], state: 'st-2', ...PKCE, prompt: null,
-    }, 600);
+    await createAuthRequest(db, {
+      client_id: CLIENT, redirect_uri: CB, scopes: ['openid', 'profile'], state: 'st-2', ...PKCE, code_challenge_method: 'S256', prompt: null,
+    }, { id });
     return id;
   }
   const BASE = '/api/oauth/authorize/requests';
@@ -295,10 +296,10 @@ describe('mobile client 環境閘門的錯誤形狀', () => {
   it('approve／deny：環境不符 → 400 unauthorized_client（OAuth 扁平形狀，符合文件的 union）；authorize 同形狀', async () => {
     for (const verb of ['approve', 'deny']) {
       const id = `${P}mobile-${verb}`;
-      await new D1Adapter(db, 'AuthRequest').upsert(id, {
+      await createAuthRequest(db, {
         client_id: 'tripline-mobile', redirect_uri: 'https://trip-planner-dby.pages.dev/mobile/oauth/callback', scopes: ['openid'],
         state: null, code_challenge: PKCE.code_challenge, code_challenge_method: 'S256', prompt: null,
-      }, 600);
+      }, { id });
       const res = track(`POST ${verb}`, await api.request('POST', `/api/oauth/authorize/requests/${id}/${verb}`, { as: `${P}user@test.com` })); // api 沒有 ENVIRONMENT → 沒有 mobile 契約
       expect(res.status).toBe(400);
       const body = await res.json();

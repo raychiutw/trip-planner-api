@@ -1,21 +1,5 @@
-/**
- * oauth_models 的「單次使用」領取：只有一個呼叫者能拿到 payload。
- * 先 find（過期視為不存在），再以條件式 DELETE 搶佔——只有 changes === 1 的贏家回傳 payload，
- * 平行重送、重放一律拿到 undefined。
- */
+/** 導回 client 的網址組裝（授權請求的單次使用領取在 auth-request.ts）。 */
 import { PARAM_BIOMETRIC_INTENT, type BiometricIntent } from './oauth-contract';
-import { D1Adapter, type AdapterPayload } from './oauth-d1-adapter';
-
-export async function takeOnce(db: D1Database, name: string, id: string): Promise<AdapterPayload | undefined> {
-  if (!id) return undefined;
-  const found = await new D1Adapter(db, name).find(id);
-  if (!found) return undefined;
-  const res = await db
-    .prepare('DELETE FROM oauth_models WHERE name = ? AND id = ? AND expires_at >= ?')
-    .bind(name, id, Date.now())
-    .run();
-  return (res.meta?.changes ?? 0) === 1 ? found : undefined;
-}
 
 /** 把 code／error／state（與 server 決定的 biometric_intent）加到 redirect_uri 的 query（原有的 code／error 先清掉，其餘 query 保留）。 */
 export function buildClientRedirect(

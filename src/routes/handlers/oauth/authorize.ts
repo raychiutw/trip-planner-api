@@ -13,7 +13,8 @@
  */
 import { D1Adapter } from '../../../lib/oauth-d1-adapter';
 import { validateAuthorizeRequest, type ClientAppRow } from '../../../lib/oauth-server/validate-authorize-request';
-import { buildClientRedirect, isBiometricIntent, type BiometricIntent } from '../../../lib/oauth-single-use';
+import { PARAM_BIOMETRIC_HINT, PARAM_BIOMETRIC_INTENT, PARAM_REAUTH, REAUTH_LOGIN, isBiometricHint, isBiometricIntent, type BiometricHint, type BiometricIntent } from '../../../lib/oauth-contract';
+import { buildClientRedirect } from '../../../lib/oauth-single-use';
 import { generateOpaqueToken } from '../../../lib/utils';
 import { oauthErrorResponse } from '../../../errors';
 import { MOBILE_GATE_MESSAGE, isMobileClientId, mobileClientAllowed } from '../../../lib/mobile-oauth';
@@ -44,9 +45,6 @@ export interface AuthRequestPayload {
 /** expected_account 是 App 目前帳號的 user id（id_token 的 sub）：只收單純字元、長度有限。 */
 const EXPECTED_ACCOUNT_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
-export const BIOMETRIC_HINTS = ['faceid', 'touchid', 'generic'] as const;
-export type BiometricHint = (typeof BIOMETRIC_HINTS)[number];
-const isBiometricHint = (v: unknown): v is BiometricHint => (BIOMETRIC_HINTS as readonly unknown[]).includes(v);
 
 /** 網頁端 origin：WEB_ORIGIN 優先，缺省用 PUBLIC_ORIGIN；都沒有則 null。 */
 function webOrigin(env: Env): string | null {
@@ -104,7 +102,7 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
   }
 
   // 重新驗證：只有 prompt=login 且 biometric_intent 為白名單值才成立，此時 expected_account 必須合法（否則 fail-closed，不建請求）
-  const intentParam = params.get('biometric_intent');
+  const intentParam = params.get(PARAM_BIOMETRIC_INTENT);
   const reauthIntent = result.prompt === 'login' && isBiometricIntent(intentParam) ? intentParam : null;
   const expectedAccount = params.get('expected_account') ?? '';
   if (reauthIntent && !EXPECTED_ACCOUNT_RE.test(expectedAccount)) {
@@ -114,7 +112,7 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     });
   }
 
-  const hintParam = params.get('biometric_hint') ?? '';
+  const hintParam = params.get(PARAM_BIOMETRIC_HINT) ?? '';
   const biometricHint = isBiometricHint(hintParam) ? hintParam : null;
   const requestId = generateOpaqueToken(32);
   const payload: AuthRequestPayload = {
@@ -132,9 +130,9 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
 
   const location = new URL('/oauth/authorize', origin);
   location.searchParams.set('request_id', requestId);
-  if (biometricHint) location.searchParams.set('biometric_hint', biometricHint);
-  // 單獨 prompt=login 也要 web 強制顯示登入表單：reauth=login（值只來自白名單 enable|disable|login）
-  const reauthParam = reauthIntent ?? (result.prompt === 'login' ? 'login' : null);
-  if (reauthParam) location.searchParams.set('reauth', reauthParam);
+  if (biometricHint) location.searchParams.set(PARAM_BIOMETRIC_HINT, biometricHint);
+  // 單獨 prompt=login 也要 web 強制顯示登入表單：reauth=login（值只來自 REAUTH_MODES 白名單）
+  const reauthParam = reauthIntent ?? (result.prompt === 'login' ? REAUTH_LOGIN : null);
+  if (reauthParam) location.searchParams.set(PARAM_REAUTH, reauthParam);
   return new Response(null, { status: 302, headers: { Location: location.toString() } });
 };

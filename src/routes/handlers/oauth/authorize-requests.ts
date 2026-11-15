@@ -4,12 +4,14 @@
  *   GET  /api/oauth/authorize/requests/:id          → 顯示用資料（client 名稱、scope、是否已同意過）
  *   POST /api/oauth/authorize/requests/:id/approve  → 寫入 Consent、產生 authorization code，回 { redirect_to }
  *   POST /api/oauth/authorize/requests/:id/deny     → 回帶 error=access_denied 與 state 的 { redirect_to }
+ *   POST /api/oauth/authorize/requests/:id/intent   → body { intent: 'enable'|'disable'|null }，記下生物辨識意圖（204）
  *
  * 安全重點：
  * - 一律要 bearer 使用者（service token 沒有使用者身份 → 403）。
  * - AuthRequest 只在 TTL 內有效；approve／deny 先「搶佔刪除」再做事，所以單次使用（重放、平行重送只有一個贏家）。
  * - redirect_to 一律由 server 端存的、已驗過的 redirect_uri 組成；不收任何由 web 傳入的 URL 或參數。
  *   approve 時再驗一次 client（仍啟用、redirect_uri 仍已註冊），避免授權請求建立後 client 被停用或改註冊。
+ * - 意圖只綁定設定它的使用者；approve 時只有同一位使用者才會讓 server 在 redirect_to 加 biometric_intent 旗標（值只來自白名單）。
  * - Consent 沿用舊 consent.ts：key = `${user}:${client}`、TTL 1 年、儲存驗過的 scopes。
  */
 import { AppError, oauthErrorResponse } from '../../../errors';
@@ -80,8 +82,25 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     client: { client_id: client!.client_id, app_name: client!.app_name },
     scopes: req.scopes,
     needs_consent: needsConsent,
+    from_app: !!req.biometric_hint,
+    biometric_hint: req.biometric_hint === 'faceid' || req.biometric_hint === 'touchid' ? req.biometric_hint : null,
     expires_at: new Date(stored.expiresAt).toISOString(),
   }), { headers: { 'content-type': 'application/json; charset=utf-8', ...NO_STORE } });
+};
+
+/** 記下（或清掉）意圖。條件式 UPDATE：請求已被 approve／deny 搶佔刪除或過期就不會被復活。 */
+export const onRequestPostIntent: PagesFunction<Env> = async (context) => {
+  const userId = requireUserId(context);
+  const id = (context.params as Record<string, string>).id ?? '';
+  const body = (await context.request.json().catch(() => null)) as { intent?: unknown } | null;
+  const intent = body?.intent;
+  if (intent !== 'enable' && intent !== 'disable' && intent !== null) throw new AppError('DATA_VALIDATION', 'intent 必須是 enable、disable 或 null');
+  const res = await context.env.DB
+    .prepare("UPDATE oauth_models SET payload = json_set(payload, '$.intent', ?, '$.intent_user_id', ?) WHERE name = 'AuthRequest' AND id = ? AND expires_at >= ?")
+    .bind(intent, intent === null ? null : userId, id, Date.now())
+    .run();
+  if ((res.meta?.changes ?? 0) !== 1) throw invalidRequest();
+  return new Response(null, { status: 204, headers: NO_STORE });
 };
 
 export const onRequestPost: PagesFunction<Env> = async (context) => {
@@ -138,5 +157,9 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
     metadata: { scopes: validated.scopes, redirect_uri: validated.redirectUri },
   }, context.env);
 
-  return reply(buildClientRedirect(validated.redirectUri, { code, state: validated.state }));
+  return reply(buildClientRedirect(validated.redirectUri, {
+    code, state: validated.state,
+    // 旗標只由 server 依存下的意圖決定：必須是白名單值，且設定者就是目前批准的使用者
+    biometricIntent: (req.intent === 'enable' || req.intent === 'disable') && req.intent_user_id === userId ? req.intent : undefined,
+  }));
 };

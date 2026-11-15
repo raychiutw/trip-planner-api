@@ -30,7 +30,15 @@ export interface AuthRequestPayload {
   code_challenge: string | null;
   code_challenge_method: 'S256' | null;
   prompt: string | null;
+  /** App 發起授權時帶的生物辨識提示（白名單；沒帶或未知值＝null，代表不是新版 App 發起）。 */
+  biometric_hint?: BiometricHint | null;
+  /** 登入後記下的意圖與設定者；批准時只有同一位使用者才生效（見 authorize-requests.ts）。 */
+  intent?: 'enable' | 'disable' | null;
+  intent_user_id?: string | null;
 }
+
+export const BIOMETRIC_HINTS = ['faceid', 'touchid', 'generic'] as const;
+export type BiometricHint = (typeof BIOMETRIC_HINTS)[number];
 
 /** 網頁端 origin：WEB_ORIGIN 優先，缺省用 PUBLIC_ORIGIN；都沒有則 null。 */
 function webOrigin(env: Env): string | null {
@@ -96,6 +104,8 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     code_challenge: result.codeChallenge,
     code_challenge_method: result.codeChallengeMethod,
     prompt: result.prompt,
+    biometric_hint: (BIOMETRIC_HINTS as readonly string[]).includes(params.get('biometric_hint') ?? '')
+      ? (params.get('biometric_hint') as BiometricHint) : null,
   };
   await new D1Adapter(context.env.DB, 'AuthRequest').upsert(requestId, payload, AUTH_REQUEST_TTL_SEC);
 

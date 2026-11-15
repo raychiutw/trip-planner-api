@@ -14,7 +14,8 @@
  * - 意圖只綁定設定它的使用者；approve 時只有同一位使用者才會讓 server 在 redirect_to 加 biometric_intent 旗標（值只來自白名單）。
  * - 重新驗證模式（AuthRequest 有 reauth_intent，由 App 以 prompt=login + biometric_intent + expected_account 發起）：
  *   approve 要求 bearer 是剛用密碼登入的（否則 403 OAUTH_REAUTH_REQUIRED，請求保留可重試）、且使用者就是 expected_account
- *   （否則 403 OAUTH_REAUTH_ACCOUNT_MISMATCH，不發 code、請求已燒掉）；意圖只來自 App，intent 端點在此模式回 400。
+ *   （否則比照 deny：200 redirect_to 帶 error=reauth_account_mismatch，不發 code、請求已燒掉）；意圖只來自 App，intent 端點在此模式回 400。
+ * - 單獨 prompt=login（沒有意圖）同樣要求剛密碼登入，但沒有 expected_account，不比對帳號。
  * - Consent 沿用舊 consent.ts：key = `${user}:${client}`、TTL 1 年、儲存驗過的 scopes。
  */
 import { AppError, oauthErrorResponse } from '../../../errors';
@@ -134,7 +135,8 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
   // 重新驗證模式：先確認這個 bearer 是剛用密碼登入的（不燒掉請求，讓使用者重新登入後可再批准）
   if (decision === 'approve') {
     const peek = (await new D1Adapter(DB, 'AuthRequest').find(params.id ?? '')) as AuthRequestPayload | undefined;
-    if (peek?.reauth_intent && !(await isFreshPasswordLogin(DB, getAuth(context)?.grantId))) throw new AppError('OAUTH_REAUTH_REQUIRED');
+    // 重新驗證模式與單獨 prompt=login 都要求剛密碼登入
+    if ((peek?.reauth_intent || peek?.prompt === 'login') && !(await isFreshPasswordLogin(DB, getAuth(context)?.grantId))) throw new AppError('OAUTH_REAUTH_REQUIRED');
   }
 
   const taken = await takeOnce(DB, 'AuthRequest', params.id ?? '');
@@ -159,12 +161,13 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
     return reply(buildClientRedirect(validated.redirectUri, { error: 'access_denied', state: validated.state }));
   }
 
-  // 重新驗證模式：批准者必須是 App 目前的帳號；不符就不發 code（請求已被搶佔，不可重試）
+  // 重新驗證模式：批准者必須是 App 目前的帳號；不符就不發 code、不寫同意（請求已被搶佔，不可重試），
+  // 但比照 deny 回 200 導回 App（error=reauth_account_mismatch），App 才收得到 callback 並提示
   if (req.reauth_intent && req.expected_account !== userId) {
     await recordAuthEvent(DB, context.request, {
       eventType: 'oauth_consent', outcome: 'failure', userId, clientId: validated.client.client_id, failureReason: 'reauth_account_mismatch',
     }, context.env);
-    throw new AppError('OAUTH_REAUTH_ACCOUNT_MISMATCH');
+    return reply(buildClientRedirect(validated.redirectUri, { error: 'reauth_account_mismatch', state: validated.state }));
   }
 
   // approve：寫入同意（驗過的 scopes，同 key 覆寫）→ 發 authorization code

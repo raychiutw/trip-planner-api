@@ -133,6 +133,8 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
   const location = new URL('/oauth/authorize', origin);
   location.searchParams.set('request_id', requestId);
   if (biometricHint) location.searchParams.set('biometric_hint', biometricHint);
-  if (reauthIntent) location.searchParams.set('reauth', reauthIntent);
+  // 單獨 prompt=login 也要 web 強制顯示登入表單：reauth=login（值只來自白名單 enable|disable|login）
+  const reauthParam = reauthIntent ?? (result.prompt === 'login' ? 'login' : null);
+  if (reauthParam) location.searchParams.set('reauth', reauthParam);
   return new Response(null, { status: 302, headers: { Location: location.toString() } });
 };

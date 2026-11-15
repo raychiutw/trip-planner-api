@@ -67,13 +67,27 @@ describe('302 Location 的 reauth（顯示用）', () => {
     expect(loc.search).not.toContain(userIdFor(EMAIL));
   });
 
+  it('單獨 prompt=login（沒有意圖、沒有 expected_account）→ reauth=login，不記 reauth_intent', async () => {
+    const loc = await location({ prompt: 'login' });
+    expect([...loc.searchParams.keys()].sort()).toEqual(['reauth', 'request_id']);
+    expect(loc.searchParams.get('reauth')).toBe('login');
+    const row = await db.prepare("SELECT json_extract(payload, '$.reauth_intent') AS i FROM oauth_models WHERE name = 'AuthRequest' AND id = ?").bind(loc.searchParams.get('request_id')).first<{ i: unknown }>();
+    expect(row!.i).toBeNull();
+  });
+
+  it('單獨 prompt=login 帶了未知意圖／expected_account → 仍只有 reauth=login，網址不含其值', async () => {
+    const loc = await location({ prompt: 'login', biometric_intent: 'delete-all', expected_account: 'x&y=https://evil.test' });
+    expect(loc.searchParams.get('reauth')).toBe('login');
+    expect(loc.search).not.toMatch(/evil|delete/);
+  });
+
   it('與 biometric_hint 並存', async () => {
     const loc = await location({ ...REAUTH, biometric_hint: 'faceid' });
     expect([...loc.searchParams.keys()].sort()).toEqual(['biometric_hint', 'reauth', 'request_id']);
   });
 
-  it('一般授權（沒有 prompt=login，或 prompt=login 但沒有意圖）→ 只有 request_id，也不記 reauth', async () => {
-    for (const p of [{} as Record<string, string>, { biometric_intent: 'enable', expected_account: userIdFor(EMAIL) }, { prompt: 'login' }, { prompt: 'consent', biometric_intent: 'enable', expected_account: userIdFor(EMAIL) }]) {
+  it('一般授權（沒有 prompt=login）→ 只有 request_id，也不記 reauth', async () => {
+    for (const p of [{} as Record<string, string>, { biometric_intent: 'enable', expected_account: userIdFor(EMAIL) }, { prompt: 'consent', biometric_intent: 'enable', expected_account: userIdFor(EMAIL) }]) {
       const loc = await location(p);
       expect([...loc.searchParams.keys()]).toEqual(['request_id']);
       const row = await db.prepare("SELECT json_extract(payload, '$.reauth_intent') AS i FROM oauth_models WHERE name = 'AuthRequest' AND id = ?").bind(loc.searchParams.get('request_id')).first<{ i: unknown }>();
@@ -81,9 +95,10 @@ describe('302 Location 的 reauth（顯示用）', () => {
     }
   });
 
-  it.each([['delete-all'], [''], ['ENABLE'], ['enable&x=https://evil.test']])('未知意圖 %j → 當作沒帶，Location 沒有 reauth 與該值', async (intent) => {
+  it.each([['delete-all'], [''], ['ENABLE'], ['enable&x=https://evil.test']])('未知意圖 %j → 當作沒帶（退為單獨 prompt=login），reauth 只會是 login，網址沒有該值', async (intent) => {
     const loc = await location({ ...REAUTH, biometric_intent: intent });
-    expect([...loc.searchParams.keys()]).toEqual(['request_id']);
+    expect([...loc.searchParams.keys()].sort()).toEqual(['reauth', 'request_id']);
+    expect(loc.searchParams.get('reauth')).toBe('login');
     expect(loc.search).not.toMatch(/evil|delete/);
   });
 
@@ -113,14 +128,20 @@ describe('approve 的重新驗證', () => {
     expect(loc.searchParams.get('state')).toBe('st-1');
   });
 
-  it('帳號不符 → 403 OAUTH_REAUTH_ACCOUNT_MISMATCH，不產生授權碼、不寫同意，請求被燒掉', async () => {
+  it('帳號不符 → 200 redirect_to 帶 error=reauth_account_mismatch 與 state，不帶 code／biometric_intent；不寫同意，請求被燒掉', async () => {
     const id = await start();
     const res = await decide(id, await freshBearer(OTHER));
-    expect(res.status).toBe(403);
-    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('OAUTH_REAUTH_ACCOUNT_MISMATCH');
+    expect(res.status).toBe(200);
+    const loc = new URL(((await res.json()) as { redirect_to: string }).redirect_to);
+    expect(loc.origin + loc.pathname).toBe(CB);
+    expect([...loc.searchParams.keys()].sort()).toEqual(['error', 'state']);
+    expect(loc.searchParams.get('error')).toBe('reauth_account_mismatch');
+    expect(loc.searchParams.get('state')).toBe('st-1');
     expect(await codeCount()).toBe(0);
     const consent = await db.prepare("SELECT 1 AS x FROM oauth_models WHERE name = 'Consent' AND json_extract(payload, '$.client_id') = ?").bind(CLIENT).first();
     expect(consent).toBeNull();
+    const audit = await db.prepare("SELECT outcome, failure_reason FROM auth_audit_log WHERE client_id = ? AND failure_reason = 'reauth_account_mismatch'").bind(CLIENT).first<{ outcome: string }>();
+    expect(audit?.outcome).toBe('failure');
     expect((await decide(id, await freshBearer(EMAIL))).status).toBe(400); // 同一請求不能再用
     expect(await codeCount()).toBe(0);
   });
@@ -181,9 +202,38 @@ describe('一般授權不變', () => {
     expect([...loc.searchParams.keys()].sort()).toEqual(['code', 'state']);
   });
 
-  it('只有 prompt=login 沒有意圖：不檢查，行為與以前相同；舊的意圖端點照常可用', async () => {
-    const id = await start({ prompt: 'login' });
-    const bearer = await api.tokenFor(OTHER);
+});
+
+describe('單獨 prompt=login：強制重新輸入密碼', () => {
+  const only = { prompt: 'login' };
+  const errCode = async (res: Response) => ((await res.json()) as { error: { code: string } }).error.code;
+
+  it('不是剛用密碼登入 → 403 OAUTH_REAUTH_REQUIRED，不發碼；請求保留，重新登入後可再批准', async () => {
+    const id = await start(only);
+    const res = await decide(id, await api.tokenFor(EMAIL));
+    expect(res.status).toBe(403);
+    expect(await errCode(res)).toBe('OAUTH_REAUTH_REQUIRED');
+    expect(await codeCount()).toBe(0);
+    const retry = await decide(id, await freshBearer(EMAIL));
+    expect(retry.status).toBe(200);
+    const loc = new URL(((await retry.json()) as { redirect_to: string }).redirect_to);
+    expect([...loc.searchParams.keys()].sort()).toEqual(['code', 'state']);
+  });
+
+  it('沒有 expected_account：不比對帳號，任何剛登入的帳號都可批准', async () => {
+    const res = await decide(await start(only), await freshBearer(OTHER));
+    expect(res.status).toBe(200);
+    expect(await codeCount()).toBe(1);
+  });
+
+  it('deny 不受限制', async () => {
+    const res = await decide(await start(only), await api.tokenFor(OTHER), 'deny');
+    expect(res.status).toBe(200);
+  });
+
+  it('舊的意圖端點照常可用，批准時仍帶旗標', async () => {
+    const id = await start(only);
+    const bearer = await freshBearer(OTHER);
     expect((await api.request('POST', `${BASE}/${id}/intent`, { bearer, json: { intent: 'enable' } })).status).toBe(204);
     const loc = new URL(((await (await decide(id, bearer)).json()) as { redirect_to: string }).redirect_to);
     expect(loc.searchParams.get('biometric_intent')).toBe('enable');

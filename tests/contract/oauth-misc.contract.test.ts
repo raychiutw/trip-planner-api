@@ -195,6 +195,15 @@ describe('authorize／authorize requests', () => {
     expect(badLoc.searchParams.has('request_id')).toBe(false);
   });
 
+  it('GET authorize：單獨 prompt=login → Location 多 reauth=login；approve 要求剛密碼登入', async () => {
+    const res = track('GET authorize', await authorize({ ...VALID, prompt: 'login' }));
+    const loc = new URL(res.headers.get('Location')!);
+    expect(loc.searchParams.get('reauth')).toBe('login');
+    const stale = track('POST approve', await api.request('POST', `${BASE}/${loc.searchParams.get('request_id')}/approve`, { bearer: await api.tokenFor(USER) }));
+    expect(stale.status).toBe(403);
+    expect(await errCode(stale)).toMatchObject({ error: { code: 'OAUTH_REAUTH_REQUIRED' } });
+  });
+
   it('GET requests/:id：from_app／biometric_hint 欄位（faceid／generic／沒帶）', async () => {
     const mk = async (hint?: string) => {
       const loc = new URL((await authorize({ ...VALID, ...(hint ? { biometric_hint: hint } : {}) })).headers.get('Location')!);
@@ -231,7 +240,7 @@ describe('authorize／authorize requests', () => {
     expect(reauth.status).toBe(400); await errBody(reauth);
   });
 
-  it('POST approve（重新驗證模式）：不是剛密碼登入 403 OAUTH_REAUTH_REQUIRED（請求保留）；帳號不符 403 OAUTH_REAUTH_ACCOUNT_MISMATCH（請求消耗）；通過 200 帶 biometric_intent', async () => {
+  it('POST approve（重新驗證模式）：不是剛密碼登入 403 OAUTH_REAUTH_REQUIRED（請求保留）；帳號不符 200 帶 error=reauth_account_mismatch 的 redirect_to（請求消耗）；通過 200 帶 biometric_intent', async () => {
     const approve = (id: string, bearer: string) => api.request('POST', `${BASE}/${id}/approve`, { bearer });
     const id = await startReauth(userIdFor(USER));
     const stale = track('POST approve', await approve(id, await api.tokenFor(USER)));
@@ -251,8 +260,14 @@ describe('authorize／authorize requests', () => {
     const id2 = await startReauth(userIdFor(USER));
     const other = `${P}other@test.com`;
     const mismatch = track('POST approve', await approve(id2, await freshBearer(other)));
-    expect(mismatch.status).toBe(403);
-    expect(await errCode(mismatch)).toMatchObject({ error: { code: 'OAUTH_REAUTH_ACCOUNT_MISMATCH' } });
+    expect(mismatch.status).toBe(200);
+    const mmBody = (await json(mismatch)) as { redirect_to: string };
+    expectContract(OauthMisc_RedirectTo, mmBody);
+    const mmLoc = new URL(mmBody.redirect_to);
+    expect(mmLoc.searchParams.get('error')).toBe('reauth_account_mismatch');
+    expect(mmLoc.searchParams.get('state')).toBe(VALID.state);
+    expect(mmLoc.searchParams.has('code')).toBe(false);
+    expect(mmLoc.searchParams.has('biometric_intent')).toBe(false);
     expect(track('POST approve', await approve(id2, await freshBearer(USER))).status).toBe(400); // 已被消耗
   });
 
@@ -455,10 +470,12 @@ describe('OpenAPI 文件與實測一致', () => {
     expect(op!.requestBody !== undefined).toBe(hasBody);
   });
 
-  it('文件描述涵蓋重新驗證的行為（intent 400、approve 403 兩個錯誤碼）', () => {
+  it('文件描述涵蓋重新驗證的行為（intent 400、approve 403 只剩 REAUTH_REQUIRED、200 說明帳號不符）', () => {
     const desc = (path: string, code: string) => (doc.paths[path]!.post as unknown as { responses: Record<string, { description: string }> }).responses[code]!.description;
     expect(desc('/api/oauth/authorize/requests/{id}/intent', '400')).toContain('重新驗證');
-    expect(desc('/api/oauth/authorize/requests/{id}/approve', '403')).toMatch(/OAUTH_REAUTH_REQUIRED[\s\S]*OAUTH_REAUTH_ACCOUNT_MISMATCH/);
+    expect(desc('/api/oauth/authorize/requests/{id}/approve', '403')).toContain('OAUTH_REAUTH_REQUIRED');
+    expect(desc('/api/oauth/authorize/requests/{id}/approve', '403')).not.toContain('OAUTH_REAUTH_ACCOUNT_MISMATCH');
+    expect(desc('/api/oauth/authorize/requests/{id}/approve', '200')).toContain('reauth_account_mismatch');
     expect(desc('/api/oauth/authorize/requests/{id}/deny', '403')).not.toContain('REAUTH'); // deny 不受重新驗證限制
   });
 

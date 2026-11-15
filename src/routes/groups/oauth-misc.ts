@@ -47,18 +47,20 @@ export function registerOauthMiscRoutes(app: OpenAPIHono<AppEnv>): void {
       401: err('沒有有效 bearer'),
       403: err('service token 沒有使用者身份（PERM_DENIED）'),
     } } });
-  const decide = (verb: string) => ({ responses: {
+  const decide = (verb: string, reauth = false) => ({ responses: {
     200: { description: `${verb}：回帶 code 或 error 的 redirect_to（由 server 端存的 redirect_uri 組成）`, schema: OauthMisc_RedirectTo },
     400: { description: '授權請求不存在、已過期、已使用，或 client 已停用（DATA_VALIDATION，ApiError 形狀）；mobile client 與環境不符（unauthorized_client，OAuth 扁平形狀，且該授權請求已被消耗）', schema: z.union([ApiError, OauthMisc_OAuthError]) },
     401: err('沒有有效 bearer'),
-    403: err('service token 沒有使用者身份（PERM_DENIED）；重新驗證模式：不是剛用密碼登入（OAUTH_REAUTH_REQUIRED，請求保留）或帳號與 App 目前帳號不同（OAUTH_REAUTH_ACCOUNT_MISMATCH，請求已消耗）'),
+    403: err(reauth
+      ? 'service token 沒有使用者身份（PERM_DENIED）；重新驗證模式：不是剛用密碼登入（OAUTH_REAUTH_REQUIRED，請求保留）或帳號與 App 目前帳號不同（OAUTH_REAUTH_ACCOUNT_MISMATCH，請求已消耗）'
+      : 'service token 沒有使用者身份（PERM_DENIED）'),
   } });
-  legacyRoute(app, { method: 'post', path: '/api/oauth/authorize/requests/:id/approve', auth: 'required', handler: authRequestDecide, summary: '同意授權（回 redirect_to）', docs: decide('同意') });
+  legacyRoute(app, { method: 'post', path: '/api/oauth/authorize/requests/:id/approve', auth: 'required', handler: authRequestDecide, summary: '同意授權（回 redirect_to）', docs: decide('同意', true) });
   legacyRoute(app, { method: 'post', path: '/api/oauth/authorize/requests/:id/deny', auth: 'required', handler: authRequestDecide, summary: '拒絕授權（回 redirect_to）', docs: decide('拒絕') });
   legacyRoute(app, { method: 'post', path: '/api/oauth/authorize/requests/:id/intent', auth: 'required', handler: authRequestIntent, summary: '記下生物辨識意圖（批准時由 server 在 redirect_to 加 biometric_intent）',
     docs: { body: OauthMisc_AuthRequestIntentBody, responses: {
       204: { description: '已記下（綁定目前使用者；null 為清除）' },
-      400: err('授權請求不存在、已過期或已使用，或 intent 值不合法（DATA_VALIDATION）'),
+      400: err('授權請求不存在、已過期或已使用，或 intent 值不合法；重新驗證模式的請求不可變更意圖（DATA_VALIDATION）'),
       401: err('沒有有效 bearer'),
       403: err('service token 沒有使用者身份（PERM_DENIED）'),
     } } });

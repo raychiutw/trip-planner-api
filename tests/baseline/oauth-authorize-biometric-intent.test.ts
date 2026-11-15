@@ -201,3 +201,28 @@ describe('302 Location 的 biometric_hint（登入前顯示用）', () => {
     expect([...plain.searchParams.keys()]).toEqual(['request_id']);
   });
 });
+
+describe('302 Location 的 theme（App 目前明暗，僅顯示用）', () => {
+  const locationOf = async (query: string) => {
+    const res = await api.get(`https://x.com/api/oauth/authorize?${new URLSearchParams(VALID)}${query}`);
+    expect(res.status).toBe(302);
+    return new URL(res.headers.get('Location')!);
+  };
+
+  it.each(['light', 'dark'])('theme=%s → Location 帶相同 theme', async (theme) => {
+    const loc = await locationOf(`&theme=${theme}`);
+    expect([...loc.searchParams.keys()].sort()).toEqual(['request_id', 'theme']);
+    expect(loc.searchParams.get('theme')).toBe(theme);
+  });
+
+  it.each([['&theme=blue'], ['&theme='], ['&theme=DARK'], ['&theme=dark&theme=light'], ['&theme=dark%26redirect_uri%3Dhttps://evil.test']])('亂填、空值、重複 %j → 不含 theme，授權照常', async (q) => {
+    const loc = await locationOf(q);
+    expect([...loc.searchParams.keys()]).toEqual(['request_id']);
+  });
+
+  it('不帶 theme → Location 只有 request_id；與 biometric_hint 並存', async () => {
+    expect([...(await locationOf('')).searchParams.keys()]).toEqual(['request_id']);
+    const both = await locationOf('&theme=dark&biometric_hint=faceid');
+    expect([...both.searchParams.keys()].sort()).toEqual(['biometric_hint', 'request_id', 'theme']);
+  });
+});

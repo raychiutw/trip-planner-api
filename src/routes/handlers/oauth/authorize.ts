@@ -9,11 +9,12 @@
  *      302 到 `${WEB_ORIGIN}/oauth/authorize?request_id=<id>`（WEB_ORIGIN 缺省用 PUBLIC_ORIGIN；都沒有 → 400）。
  *   3. 登入、同意頁由 web 負責，經 `/api/oauth/authorize/requests/:id`（見 authorize-requests.ts）完成。
  * 網址只帶不透明的 request_id：redirect_uri 等參數都留在 server 端，web 無法竄改。
+ * 例外：theme 為 light／dark（且只出現一次）時一併帶上，讓授權頁繪製前就套用 App 的明暗；其他值丟棄。
  * 例外：biometric_hint 為白名單值時一併帶上（登入前就要決定是否顯示專門鈕，此時讀不到需 bearer 的 GET requests/:id；僅顯示用）。
  */
 import { buildAuthRequestPayload, createAuthRequest, parseReauth } from '../../../lib/auth-request';
 import { loadClientApp, validateAuthorizeRequest, type ClientAppRow } from '../../../lib/oauth-server/validate-authorize-request';
-import { PARAM_BIOMETRIC_HINT, PARAM_BIOMETRIC_INTENT, PARAM_EXPECTED_ACCOUNT, PARAM_REAUTH, PROMPT_LOGIN, REAUTH_LOGIN, isBiometricHint } from '../../../lib/oauth-contract';
+import { PARAM_BIOMETRIC_HINT, PARAM_BIOMETRIC_INTENT, PARAM_EXPECTED_ACCOUNT, PARAM_REAUTH, PARAM_THEME, PROMPT_LOGIN, REAUTH_LOGIN, isBiometricHint, isTheme } from '../../../lib/oauth-contract';
 import { buildClientRedirect } from '../../../lib/oauth-redirect';
 import { oauthErrorResponse } from '../../../errors';
 import { MOBILE_GATE_MESSAGE, isMobileClientId, mobileClientAllowed } from '../../../lib/mobile-oauth';
@@ -87,6 +88,8 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
   const location = new URL('/oauth/authorize', origin);
   location.searchParams.set('request_id', requestId);
   if (biometricHint) location.searchParams.set(PARAM_BIOMETRIC_HINT, biometricHint);
+  const themes = params.getAll(PARAM_THEME);
+  if (themes.length === 1 && isTheme(themes[0])) location.searchParams.set(PARAM_THEME, themes[0]);
   // 單獨 prompt=login 也要 web 強制顯示登入表單：reauth=login（值只來自 REAUTH_MODES 白名單）
   const reauthParam = (reauth.kind === 'reauth' ? reauth.intent : null) ?? (result.prompt === PROMPT_LOGIN ? REAUTH_LOGIN : null);
   if (reauthParam) location.searchParams.set(PARAM_REAUTH, reauthParam);

@@ -12,7 +12,7 @@ import {
   BIOMETRIC_BUTTON_HINTS, BIOMETRIC_HINTS, BIOMETRIC_INTENTS, LOGIN_CODE_REDIRECT_URI, LOGIN_CODE_TTL_SEC,
   PARAM_BIOMETRIC_INTENT, REAUTH_ACCOUNT_MISMATCH, REAUTH_MODES,
 } from '../src/lib/oauth-contract';
-import { isFreshPasswordLogin } from '../src/routes/handlers/oauth/authorize-requests';
+import { isFreshPasswordLogin } from '../src/lib/oauth-server/fresh-login';
 import { createD1 } from './support/d1';
 
 let d1: ReturnType<typeof createD1>;

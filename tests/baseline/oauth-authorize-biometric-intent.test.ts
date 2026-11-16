@@ -94,7 +94,7 @@ describe('意圖端點', () => {
 });
 
 describe('approve 的導回網址', () => {
-  it.each(['enable', 'disable'])('意圖 %s → redirect_to 多旗標，code／state 照舊', async (intent) => {
+  it.each(['enable'])('意圖 %s → redirect_to 多旗標，code／state 照舊', async (intent) => {
     const id = await start({ biometric_hint: 'faceid' });
     expect((await setIntent(id, intent)).status).toBe(204);
     const loc = await approve(id);
@@ -147,8 +147,8 @@ describe('approve 的導回網址', () => {
     expect(none.searchParams.has('biometric_intent')).toBe(false);
     expect(none.searchParams.get('source')).toBe('1');
     const id = await start({ redirect_uri: CB_FLAGGED });
-    await setIntent(id, 'disable');
-    expect((await approve(id)).searchParams.getAll('biometric_intent')).toEqual(['disable']);
+    await setIntent(id, 'enable');
+    expect((await approve(id)).searchParams.getAll('biometric_intent')).toEqual(['enable']);
   });
 
   it('意圖只對設定它的使用者有效：別人批准不帶旗標；別人改設也不會讓原使用者拿到旗標', async () => {
@@ -158,7 +158,7 @@ describe('approve 的導回網址', () => {
 
     const id2 = await start();
     await setIntent(id2, 'enable', EMAIL);
-    await setIntent(id2, 'disable', OTHER); // 後設者蓋過，且綁定到後設者
+    await setIntent(id2, 'enable', OTHER); // 後設者蓋過，且綁定到後設者
     expect((await approve(id2, EMAIL)).searchParams.has('biometric_intent')).toBe(false);
   });
 

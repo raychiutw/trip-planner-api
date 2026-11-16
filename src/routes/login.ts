@@ -22,7 +22,7 @@ import { generateOpaqueToken } from '../lib/crypto';
 import { normalizeEmail } from '../lib/email-utils';
 import { sha256Base64Url } from '../lib/crypto';
 import { D1Adapter } from '../lib/oauth-d1-adapter';
-import { LOGIN_CODE_REDIRECT_URI, LOGIN_CODE_TTL_SEC } from '../lib/oauth-contract';
+import { LOGIN_CODE_TTL_SEC } from '../lib/oauth-contract';
 import { parseAllowedScopes, readJsonObject } from '../lib/oauth-request';
 import { verifyPassword } from '../lib/password';
 import { recordSecurityEvent } from '../lib/security-events';
@@ -124,7 +124,7 @@ export function registerLoginRoute(app: Hono<AppEnv>): void {
     await new D1Adapter(DB, 'AuthorizationCode').upsert(code, {
       client_id: clientId,
       user_id: userId,
-      redirect_uri: LOGIN_CODE_REDIRECT_URI, // 第一方直接換 code，沒有跳轉；兌換時也不可帶 redirect_uri
+      redirect_uri: null, // 第一方直接換 code，沒有跳轉；兌換時也不可帶 redirect_uri
       scopes: requested,
       code_challenge: challenge,
       code_challenge_method: 'S256',

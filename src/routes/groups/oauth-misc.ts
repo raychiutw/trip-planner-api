@@ -1,7 +1,7 @@
 import { z } from '@hono/zod-openapi';
 import type { OpenAPIHono } from '@hono/zod-openapi';
 import type { AppEnv } from '../../env';
-import { BIOMETRIC_INTENTS, PARAM_BIOMETRIC_HINT, PARAM_BIOMETRIC_INTENT, PARAM_REAUTH, PARAM_THEME, REAUTH_ACCOUNT_MISMATCH, REAUTH_LOGIN } from '../../lib/oauth-contract';
+import { PARAM_BIOMETRIC_HINT, PARAM_BIOMETRIC_INTENT, PARAM_THEME } from '../../lib/oauth-contract';
 import { legacyRoute } from '../../legacy';
 import { ApiError } from '../../schemas/common';
 import {
@@ -38,7 +38,7 @@ export function registerOauthMiscRoutes(app: OpenAPIHono<AppEnv>): void {
     docs: { responses: { 200: { description: 'OIDC Discovery metadata', schema: OauthMisc_OpenIdConfiguration } } } });
   legacyRoute(app, { method: 'get', path: '/api/oauth/authorize', auth: 'none', handler: authorizeGet, summary: '第三方授權入口（存 AuthRequest 並導向 web）',
     docs: { query: OauthMisc_AuthorizeQuery, responses: {
-      302: { description: `通過驗證：Location 為 \`\${WEB_ORIGIN}/oauth/authorize?request_id=<id>\`（${PARAM_BIOMETRIC_HINT} 為白名單值時多帶 \`&${PARAM_BIOMETRIC_HINT}=<值>\`；重新驗證模式多帶 \`&${PARAM_REAUTH}=${BIOMETRIC_INTENTS.join('|')}\`、單獨 \`prompt=login\` 多帶 \`&${PARAM_REAUTH}=${REAUTH_LOGIN}\`；${PARAM_THEME} 為 light／dark 時多帶 \`&${PARAM_THEME}=<值>\`；皆僅顯示用）；可導回 client 的驗證錯誤：Location 為 redirect_uri?error=...&error_description=...&state=...（無 JSON 內容）` },
+      302: { description: `通過驗證：Location 為 \`\${WEB_ORIGIN}/oauth/authorize?request_id=<id>\`（${PARAM_BIOMETRIC_HINT} 為白名單值時多帶 \`&${PARAM_BIOMETRIC_HINT}=<值>\`；${PARAM_THEME} 為 light／dark 時多帶 \`&${PARAM_THEME}=<值>\`；皆僅顯示用）；可導回 client 的驗證錯誤：Location 為 redirect_uri?error=...&error_description=...&state=...（無 JSON 內容）。舊版 App 帶的 prompt=login、biometric_intent、expected_account 一律忽略（重新驗證模式已移除），不報錯也不帶進 Location` },
       400: oerr('client／redirect_uri 有問題（不可導回 client）；mobile client（tripline-mobile／-uat／-dev）與環境或精確 callback 不符（unauthorized_client）；或 WEB_ORIGIN／PUBLIC_ORIGIN 未設定（server_error）'),
     } } });
   legacyRoute(app, { method: 'get', path: '/api/oauth/authorize/requests/:id', auth: 'required', handler: authRequestGet, summary: '授權請求的同意畫面資料',
@@ -48,20 +48,18 @@ export function registerOauthMiscRoutes(app: OpenAPIHono<AppEnv>): void {
       401: err('沒有有效 bearer'),
       403: err('service token 沒有使用者身份（PERM_DENIED）'),
     } } });
-  const decide = (verb: string, reauth = false) => ({ responses: {
-    200: { description: `${verb}：回帶 code 或 error 的 redirect_to（由 server 端存的 redirect_uri 組成）${reauth ? `；重新驗證模式帳號與 App 目前帳號不同時，比照拒絕：不發 code，redirect_to 帶 error=${REAUTH_ACCOUNT_MISMATCH} 與 state（請求已消耗）` : ''}`, schema: OauthMisc_RedirectTo },
+  const decide = (verb: string) => ({ responses: {
+    200: { description: `${verb}：回帶 code 或 error 的 redirect_to（由 server 端存的 redirect_uri 組成）`, schema: OauthMisc_RedirectTo },
     400: { description: '授權請求不存在、已過期、已使用，或 client 已停用（DATA_VALIDATION，ApiError 形狀）；mobile client 與環境不符（unauthorized_client，OAuth 扁平形狀，且該授權請求已被消耗）', schema: z.union([ApiError, OauthMisc_OAuthError]) },
     401: err('沒有有效 bearer'),
-    403: err(reauth
-      ? 'service token 沒有使用者身份（PERM_DENIED）；重新驗證模式或 prompt=login：不是剛用密碼登入（OAUTH_REAUTH_REQUIRED，請求保留）'
-      : 'service token 沒有使用者身份（PERM_DENIED）'),
+    403: err('service token 沒有使用者身份（PERM_DENIED）'),
   } });
-  legacyRoute(app, { method: 'post', path: '/api/oauth/authorize/requests/:id/approve', auth: 'required', handler: authRequestDecide, summary: '同意授權（回 redirect_to）', docs: decide('同意', true) });
+  legacyRoute(app, { method: 'post', path: '/api/oauth/authorize/requests/:id/approve', auth: 'required', handler: authRequestDecide, summary: '同意授權（回 redirect_to）', docs: decide('同意') });
   legacyRoute(app, { method: 'post', path: '/api/oauth/authorize/requests/:id/deny', auth: 'required', handler: authRequestDecide, summary: '拒絕授權（回 redirect_to）', docs: decide('拒絕') });
   legacyRoute(app, { method: 'post', path: '/api/oauth/authorize/requests/:id/intent', auth: 'required', handler: authRequestIntent, summary: `記下生物辨識意圖（批准時由 server 在 redirect_to 加 ${PARAM_BIOMETRIC_INTENT}）`,
     docs: { body: OauthMisc_AuthRequestIntentBody, responses: {
       204: { description: '已記下（綁定目前使用者；null 為清除）' },
-      400: err('授權請求不存在、已過期或已使用，或 intent 值不合法；重新驗證模式的請求不可變更意圖（DATA_VALIDATION）'),
+      400: err('授權請求不存在、已過期或已使用，或 intent 值不合法（只收 enable 或 null）（DATA_VALIDATION）'),
       401: err('沒有有效 bearer'),
       403: err('service token 沒有使用者身份（PERM_DENIED）'),
     } } });

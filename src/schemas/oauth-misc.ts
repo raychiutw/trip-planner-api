@@ -52,11 +52,9 @@ export const OauthMisc_AuthorizeQuery = z.object({
   state: z.string().optional(),
   code_challenge: z.string().optional(),
   code_challenge_method: z.string().optional().openapi({ example: 'S256' }),
-  prompt: z.string().optional(),
+  prompt: z.string().optional().openapi({ description: 'OIDC prompt（none／login／consent／select_account；其他值回 invalid_request）。consent 強制重新同意；login 不再觸發重新驗證（已移除），與沒帶相同' }),
   biometric_hint: z.enum(BIOMETRIC_HINTS).optional().openapi({ description: 'App 發起授權時帶；其他值當作沒帶' }),
-  biometric_intent: z.enum(BIOMETRIC_INTENTS).optional().openapi({ description: '重新驗證模式（需 prompt=login 與 expected_account）；其他值當作沒帶' }),
   theme: z.enum(THEMES).optional().openapi({ description: 'App 目前顯示的明暗；light／dark 會原樣帶進 web 授權頁網址，其他值或重複參數當作沒帶' }),
-  expected_account: z.string().optional().openapi({ description: 'App 目前帳號的 user id（id_token 的 sub），1～64 字元 [A-Za-z0-9_-]；有 biometric_intent 時必填，缺少或格式不符回 invalid_request' }),
 });
 
 export const OauthMisc_AuthRequestInfo = z.object({

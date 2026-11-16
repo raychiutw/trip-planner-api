@@ -46,7 +46,6 @@ const errBody = async (res: Response, schema: typeof ApiError | typeof OauthMisc
 const sent = <T>(schema: Parameters<typeof expectContract>[0], value: T): T => { expectContract(schema, value); return value; };
 const docRejects = (schema: Parameters<typeof expectContract>[0], value: unknown) => expect(contractIssues(schema, value)).not.toEqual([]);
 const json = async (res: Response) => res.json();
-const errCode = async (res: Response) => { const b = await res.json(); expectContract(ApiError, b); return b; };
 
 beforeAll(async () => {
   db = await createTestDb();
@@ -106,6 +105,11 @@ describe('jwks／openid-configuration', () => {
 
 describe('authorize／authorize requests', () => {
   const authorize = (params: Record<string, string>) => api.get(`/api/oauth/authorize?${new URLSearchParams(sent(OauthMisc_AuthorizeQuery, params))}`);
+  /** 舊版 App 仍可能送、但文件已不列的參數：先確認文件不收，再原樣送出。 */
+  const authorizeLegacy = (params: Record<string, string>) => {
+    docRejects(OauthMisc_AuthorizeQuery, params);
+    return api.get(`/api/oauth/authorize?${new URLSearchParams(params)}`);
+  };
   const VALID = { client_id: CLIENT, redirect_uri: CB, response_type: 'code', scope: 'openid profile', state: 'st-1', ...PKCE };
 
   it('GET authorize：302 到 web 授權頁，Location 帶 request_id', async () => {
@@ -162,47 +166,27 @@ describe('authorize／authorize requests', () => {
   });
 
   const USER = `${P}user@test.com`;
-  /** 重新驗證模式的授權請求：走真實的 authorize 入口建立（prompt=login + biometric_intent + expected_account）。 */
-  async function startReauth(expected: string): Promise<string> {
-    const q = { ...VALID, prompt: 'login', biometric_intent: 'enable', expected_account: expected };
-    const res = track('GET authorize', await authorize(q));
-    expect(res.status).toBe(302);
-    const loc = new URL(res.headers.get('Location')!);
-    expect(loc.searchParams.get('reauth')).toBe('enable');
-    return loc.searchParams.get('request_id')!;
-  }
-  /** 模擬「剛用密碼登入」：該 grant 的 /api/oauth/login code（redirect_uri 為 null、60 秒 TTL）仍在。 */
-  async function freshBearer(email: string): Promise<string> {
-    const token = await api.tokenFor(email);
-    await new D1Adapter(db, 'AuthorizationCode').upsert(`${P}login-${token}`, {
-      client_id: 'http-test', user_id: userIdFor(email), redirect_uri: null, scopes: [], grantId: `grant-${token}`, consumed: Date.now(),
-    }, 60);
-    return token;
-  }
-
-  it('GET authorize：biometric_hint／重新驗證參數 → Location 多 biometric_hint、reauth；expected_account 不合法 → 302 invalid_request', async () => {
-    const ok = track('GET authorize', await authorize({ ...VALID, biometric_hint: 'faceid', prompt: 'login', biometric_intent: 'disable', expected_account: userIdFor(USER) }));
+  it('GET authorize：biometric_hint → Location 多 biometric_hint；舊的重新驗證參數（prompt=login、biometric_intent、expected_account）一律忽略，含格式錯誤的 expected_account', async () => {
+    const ok = track('GET authorize', await authorizeLegacy({ ...VALID, biometric_hint: 'faceid', prompt: 'login', biometric_intent: 'disable', expected_account: userIdFor(USER) }));
     expect(ok.status).toBe(302);
     const loc = new URL(ok.headers.get('Location')!);
-    expect([...loc.searchParams.keys()]).toEqual(['request_id', 'biometric_hint', 'reauth']);
+    expect([...loc.searchParams.keys()]).toEqual(['request_id', 'biometric_hint']);
     expect(loc.searchParams.get('biometric_hint')).toBe('faceid');
-    expect(loc.searchParams.get('reauth')).toBe('disable');
 
-    const bad = track('GET authorize', await authorize({ ...VALID, prompt: 'login', biometric_intent: 'enable', expected_account: 'has space' }));
+    const bad = track('GET authorize', await authorizeLegacy({ ...VALID, prompt: 'login', biometric_intent: 'enable', expected_account: 'has space' }));
     expect(bad.status).toBe(302);
     const badLoc = new URL(bad.headers.get('Location')!);
-    expect(badLoc.origin + badLoc.pathname).toBe(CB);
-    expect(badLoc.searchParams.get('error')).toBe('invalid_request');
-    expect(badLoc.searchParams.has('request_id')).toBe(false);
+    expect([...badLoc.searchParams.keys()]).toEqual(['request_id']);
   });
 
-  it('GET authorize：單獨 prompt=login → Location 多 reauth=login；approve 要求剛密碼登入', async () => {
+  it('GET authorize：單獨 prompt=login → 只有 request_id；一般 bearer 即可批准', async () => {
     const res = track('GET authorize', await authorize({ ...VALID, prompt: 'login' }));
     const loc = new URL(res.headers.get('Location')!);
-    expect(loc.searchParams.get('reauth')).toBe('login');
-    const stale = track('POST approve', await api.request('POST', `${BASE}/${loc.searchParams.get('request_id')}/approve`, { bearer: await api.tokenFor(USER) }));
-    expect(stale.status).toBe(403);
-    expect(await errCode(stale)).toMatchObject({ error: { code: 'OAUTH_REAUTH_REQUIRED' } });
+    expect([...loc.searchParams.keys()]).toEqual(['request_id']);
+    const ok = track('POST approve', await api.request('POST', `${BASE}/${loc.searchParams.get('request_id')}/approve`, { bearer: await api.tokenFor(USER) }));
+    expect(ok.status).toBe(200);
+    const okLoc = new URL(((await json(ok)) as { redirect_to: string }).redirect_to);
+    expect([...okLoc.searchParams.keys()].sort()).toEqual(['code', 'state']);
   });
 
   it('GET requests/:id：from_app／biometric_hint 欄位（faceid／generic／沒帶）', async () => {
@@ -219,7 +203,7 @@ describe('authorize／authorize requests', () => {
     expect(await mk()).toMatchObject({ from_app: false, biometric_hint: null });
   });
 
-  it('POST requests/:id/intent → 204；401／403／400（不存在、值不合法、重新驗證模式）', async () => {
+  it('POST requests/:id/intent → 204；401／403／400（不存在、值不合法，含已移除的 disable）', async () => {
     const K = 'POST intent';
     const call = (id: string, init: Parameters<typeof api.request>[2]) => api.request('POST', `${BASE}/${id}/intent`, init);
     const ok = track(K, await call(await putRequest(), { as: USER, json: sent(OauthMisc_AuthRequestIntentBody, { intent: 'enable' }) }));
@@ -237,39 +221,9 @@ describe('authorize／authorize requests', () => {
     docRejects(OauthMisc_AuthRequestIntentBody, { intent: 'delete-all' });
     const badValue = track(K, await call(await putRequest(), { as: USER, json: { intent: 'delete-all' } }));
     expect(badValue.status).toBe(400); await errBody(badValue);
-    const reauth = track(K, await call(await startReauth(userIdFor(USER)), { as: USER, json: { intent: 'disable' } }));
-    expect(reauth.status).toBe(400); await errBody(reauth);
-  });
-
-  it('POST approve（重新驗證模式）：不是剛密碼登入 403 OAUTH_REAUTH_REQUIRED（請求保留）；帳號不符 200 帶 error=reauth_account_mismatch 的 redirect_to（請求消耗）；通過 200 帶 biometric_intent', async () => {
-    const approve = (id: string, bearer: string) => api.request('POST', `${BASE}/${id}/approve`, { bearer });
-    const id = await startReauth(userIdFor(USER));
-    const stale = track('POST approve', await approve(id, await api.tokenFor(USER)));
-    expect(stale.status).toBe(403);
-    expect(await errCode(stale)).toMatchObject({ error: { code: 'OAUTH_REAUTH_REQUIRED' } });
-
-    const bearer = await freshBearer(USER);
-    const ok = track('POST approve', await approve(id, bearer));
-    expect(ok.status).toBe(200);
-    const okBody = (await json(ok)) as { redirect_to: string };
-    expectContract(OauthMisc_RedirectTo, okBody);
-    const loc = new URL(okBody.redirect_to);
-    expect(loc.searchParams.get('biometric_intent')).toBe('enable');
-    expect(loc.searchParams.get('code')).toBeTruthy();
-    expect(track('POST approve', await approve(id, bearer)).status).toBe(400); // 重放
-
-    const id2 = await startReauth(userIdFor(USER));
-    const other = `${P}other@test.com`;
-    const mismatch = track('POST approve', await approve(id2, await freshBearer(other)));
-    expect(mismatch.status).toBe(200);
-    const mmBody = (await json(mismatch)) as { redirect_to: string };
-    expectContract(OauthMisc_RedirectTo, mmBody);
-    const mmLoc = new URL(mmBody.redirect_to);
-    expect(mmLoc.searchParams.get('error')).toBe('reauth_account_mismatch');
-    expect(mmLoc.searchParams.get('state')).toBe(VALID.state);
-    expect(mmLoc.searchParams.has('code')).toBe(false);
-    expect(mmLoc.searchParams.has('biometric_intent')).toBe(false);
-    expect(track('POST approve', await approve(id2, await freshBearer(USER))).status).toBe(400); // 已被消耗
+    docRejects(OauthMisc_AuthRequestIntentBody, { intent: 'disable' });
+    const disable = track(K, await call(await putRequest(), { as: USER, json: { intent: 'disable' } }));
+    expect(disable.status).toBe(400); await errBody(disable);
   });
 
   it.each(['approve', 'deny'] as const)('POST requests/:id/%s → 200 redirect_to；401／403／400', async (verb) => {
@@ -471,13 +425,14 @@ describe('OpenAPI 文件與實測一致', () => {
     expect(op!.requestBody !== undefined).toBe(hasBody);
   });
 
-  it('文件描述涵蓋重新驗證的行為（intent 400、approve 403 只剩 REAUTH_REQUIRED、200 說明帳號不符）', () => {
+  it('文件描述不再有重新驗證模式（approve 403 只剩 PERM_DENIED、200 不提帳號不符、authorize 註明舊參數忽略）', () => {
     const desc = (path: string, code: string) => (doc.paths[path]!.post as unknown as { responses: Record<string, { description: string }> }).responses[code]!.description;
-    expect(desc('/api/oauth/authorize/requests/{id}/intent', '400')).toContain('重新驗證');
-    expect(desc('/api/oauth/authorize/requests/{id}/approve', '403')).toContain('OAUTH_REAUTH_REQUIRED');
-    expect(desc('/api/oauth/authorize/requests/{id}/approve', '403')).not.toContain('OAUTH_REAUTH_ACCOUNT_MISMATCH');
-    expect(desc('/api/oauth/authorize/requests/{id}/approve', '200')).toContain('reauth_account_mismatch');
-    expect(desc('/api/oauth/authorize/requests/{id}/deny', '403')).not.toContain('REAUTH'); // deny 不受重新驗證限制
+    expect(desc('/api/oauth/authorize/requests/{id}/intent', '400')).not.toContain('重新驗證');
+    expect(desc('/api/oauth/authorize/requests/{id}/approve', '403')).not.toContain('REAUTH');
+    expect(desc('/api/oauth/authorize/requests/{id}/approve', '200')).not.toContain('reauth_account_mismatch');
+    const authorizeDesc = (doc.paths['/api/oauth/authorize']!.get as unknown as { responses: Record<string, { description: string }> }).responses['302']!.description;
+    expect(authorizeDesc).not.toContain('reauth=');
+    expect(authorizeDesc).toContain('一律忽略');
   });
 
   it('文件列出的每個狀態碼都有被實際打到（排除未列出的）', () => {

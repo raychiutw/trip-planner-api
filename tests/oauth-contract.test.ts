@@ -1,7 +1,7 @@
 /**
  * 授權契約單一出處（src/lib/oauth-contract.ts）的守門：
  * 1. OpenAPI 文件上的 enum 值必須等於契約常數（web 由此產生型別）；常數本身也釘死字面值。
- * 2. 登入碼 TTL 與「不帶 redirect_uri」是登入端點與 isFreshPasswordLogin 之間的隱性耦合，改任何一邊都要紅燈。
+ * 2. 登入碼 TTL 與「不帶 redirect_uri」（第一方直接換 token）。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createHash } from 'node:crypto';
@@ -9,10 +9,10 @@ import { createApp } from '../src/app';
 import type { Env } from '../src/env';
 import { hashPassword } from '../src/lib/password';
 import {
-  BIOMETRIC_BUTTON_HINTS, BIOMETRIC_HINTS, BIOMETRIC_INTENTS, LOGIN_CODE_REDIRECT_URI, LOGIN_CODE_TTL_SEC,
-  PARAM_BIOMETRIC_INTENT, PARAM_THEME, REAUTH_ACCOUNT_MISMATCH, REAUTH_MODES, THEMES,
+  BIOMETRIC_BUTTON_HINTS, BIOMETRIC_HINTS, BIOMETRIC_INTENTS, LOGIN_CODE_TTL_SEC,
+  PARAM_BIOMETRIC_INTENT, PARAM_THEME, THEMES,
 } from '../src/lib/oauth-contract';
-import { isFreshPasswordLogin } from '../src/lib/oauth-server/fresh-login';
+import * as contract from '../src/lib/oauth-contract';
 import { createD1 } from './support/d1';
 
 let d1: ReturnType<typeof createD1>;
@@ -35,9 +35,7 @@ describe('契約常數的字面值（少一個值就紅）', () => {
   it('白名單與錯誤值', () => {
     expect([...BIOMETRIC_HINTS]).toEqual(['faceid', 'touchid', 'generic']);
     expect([...BIOMETRIC_BUTTON_HINTS]).toEqual(['faceid', 'touchid']);
-    expect([...BIOMETRIC_INTENTS]).toEqual(['enable', 'disable']);
-    expect([...REAUTH_MODES]).toEqual(['enable', 'disable', 'login']);
-    expect(REAUTH_ACCOUNT_MISMATCH).toBe('reauth_account_mismatch');
+    expect([...BIOMETRIC_INTENTS]).toEqual(['enable']);
     expect(PARAM_BIOMETRIC_INTENT).toBe('biometric_intent');
     expect([...THEMES]).toEqual(['light', 'dark']);
     expect(PARAM_THEME).toBe('theme');
@@ -59,13 +57,29 @@ async function spec() {
   return (await (await createApp().request('/openapi.json', {}, env)).json()) as { paths: Record<string, Record<string, Json>>; components: { schemas: Record<string, Json> } };
 }
 
+describe('重新驗證模式已移除（ADR-0019）', () => {
+  it('契約不再匯出重新驗證的常數', () => {
+    for (const name of ['PROMPT_LOGIN', 'REAUTH_LOGIN', 'REAUTH_MODES', 'REAUTH_ACCOUNT_MISMATCH', 'PARAM_REAUTH', 'PARAM_EXPECTED_ACCOUNT', 'LOGIN_CODE_REDIRECT_URI']) {
+      expect(contract).not.toHaveProperty(name);
+    }
+  });
+  it('OpenAPI 的 authorize 不再列 biometric_intent、expected_account；全文不再出現重新驗證錯誤碼', async () => {
+    const s = await spec();
+    const names = (s.paths['/api/oauth/authorize']!.get!.parameters as { name: string }[]).map((p) => p.name);
+    expect(names).not.toContain('biometric_intent');
+    expect(names).not.toContain('expected_account');
+    const text = JSON.stringify(s);
+    expect(text).not.toContain('OAUTH_REAUTH_REQUIRED');
+    expect(text).not.toContain('reauth_account_mismatch');
+  });
+});
+
 describe('OpenAPI 的 enum 等於契約常數', () => {
-  it('GET /authorize 的 biometric_hint、biometric_intent', async () => {
+  it('GET /authorize 的 biometric_hint、theme', async () => {
     const s = await spec();
     const params = s.paths['/api/oauth/authorize']!.get!.parameters as { name: string; schema: unknown }[];
     const of = (n: string) => enumsOf(params.find((p) => p.name === n)!.schema);
     expect(of('biometric_hint')).toEqual([[...BIOMETRIC_HINTS]]);
-    expect(of('biometric_intent')).toEqual([[...BIOMETRIC_INTENTS]]);
     expect(of('theme')).toEqual([[...THEMES]]);
   });
   it('GET requests/:id 的 biometric_hint（只有按鈕提示值）', async () => {
@@ -82,10 +96,9 @@ describe('OpenAPI 的 enum 等於契約常數', () => {
   });
 });
 
-describe('登入碼 TTL 與 redirect_uri 約定（login 端點 × isFreshPasswordLogin）', () => {
-  it('釘死約定的字面值', () => {
+describe('登入碼 TTL 與 redirect_uri 約定（login 端點）', () => {
+  it('釘死 TTL 字面值', () => {
     expect(LOGIN_CODE_TTL_SEC).toBe(60);
-    expect(LOGIN_CODE_REDIRECT_URI).toBeNull();
   });
 
   async function loginAndExchange() {
@@ -110,17 +123,9 @@ describe('登入碼 TTL 與 redirect_uri 約定（login 端點 × isFreshPasswor
     const before = Date.now();
     const { expires_in, row, payload } = await loginAndExchange();
     expect(expires_in).toBe(LOGIN_CODE_TTL_SEC);
-    expect(payload.redirect_uri).toBe(LOGIN_CODE_REDIRECT_URI);
+    expect(payload.redirect_uri).toBeNull();
     expect(row.expires_at).toBeGreaterThanOrEqual(before + LOGIN_CODE_TTL_SEC * 1000);
     expect(row.expires_at).toBeLessThanOrEqual(Date.now() + LOGIN_CODE_TTL_SEC * 1000);
   });
 
-  it('剛登入的 grant 通過新鮮度檢查，超過 TTL 就過期', async () => {
-    const { payload } = await loginAndExchange();
-    expect(await isFreshPasswordLogin(d1.db, payload.grantId)).toBe(true);
-    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + (LOGIN_CODE_TTL_SEC - 1) * 1000 });
-    expect(await isFreshPasswordLogin(d1.db, payload.grantId)).toBe(true);
-    vi.setSystemTime(Date.now() + 2 * 1000);
-    expect(await isFreshPasswordLogin(d1.db, payload.grantId)).toBe(false);
-  });
 });
